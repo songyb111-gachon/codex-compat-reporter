@@ -61,8 +61,20 @@ falls back.
    does not survive; it is reported back as a disagreement.
 2. **Replaces the prose.** `recorded_by`, `attribution.rule` and `note` are rewritten by the
    receiving side from its own strings. No sentence from a report is ever displayed as written.
-3. **Files it apart.** It lands in `docs/evidence/community/<github login>/`, never in the
-   product's compatibility data, and never changes a version's tier.
+3. **Counts it as Reported, and as nothing else.** It lands in
+   `docs/evidence/community/<github login>/`, never in the product's compatibility data, and never
+   changes a version's tier. What it contributes is one machine's entry in the **Reported** grade
+   beside the version - a grade of its own, beside the ladder *verified*, *checked*, *compatible*,
+   *failed here*, and never on it. A version whose own evidence says nothing stays *compatible*
+   however many reports arrive. A report is:
+   - counted as "worked" when at least one of its records was delivered and ended in the state
+     "recovered";
+   - counted as "failed" when at least one delivered record ended in "recovery_turn_failed",
+     "failed" or "terminal_failure";
+   - counted as "neither" when nothing was delivered.
+
+   One report can be counted in both columns when different records say different things, and that
+   is shown rather than resolved.
 
 ## What gets a report refused
 
@@ -77,6 +89,6 @@ falls back.
 ## Why it is not trusted further
 
 A file can be written by hand. Checking it harder would not change that; it would only make the
-result look more authoritative than it is. So community reports are kept apart, are shown as
-"reported by", and grant nothing - and a report that a version *failed* is worth as much as one
-that says it worked, which is the honest use for a document nobody can prove.
+result look more authoritative than it is. So a report is shown under the Reported grade, beside
+the ladder and never on it, and grants nothing - and a report that a version *failed* is worth as
+much as one that says it worked, which is the honest use for a document nobody can prove.

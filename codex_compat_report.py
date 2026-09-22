@@ -12,12 +12,14 @@ What it writes: one JSON file of counts, states, times and a version string. No 
 no titles, no identifiers, no paths, no user name. Read it before you send it; that is the point of
 its being a file.
 
-What it cannot do: make a Codex version "verified" for anybody else. Reports from people other than
-the maintainer are shown apart from the maintainer's own evidence, and never raise a version's tier
-or change what the product allows itself to do. The tool measures; the project recomputes every
-derived field from the measurements when the report arrives, so a hand-edited conclusion does not
-survive. Nothing here proves a file was not made up on the machine that sent it, and the project
-says so out loud rather than pretending otherwise.
+What it cannot do: make a Codex version "verified" for anybody else. A report has a grade of its
+own, Reported: it stands beside the ladder of four words - verified, checked, compatible, failed
+here - and never on it, and never raises a version's tier. It is shown beside the version with the
+number of machines that said the same thing, and a version whose own evidence says nothing stays
+compatible however many reports arrive. The tool measures; the project recomputes every derived
+field from the measurements when the report arrives, so a hand-edited conclusion does not survive.
+Nothing here proves a file was not made up on the machine that sent it, and the project says so out
+loud rather than pretending otherwise.
 """
 from __future__ import annotations
 
@@ -320,9 +322,9 @@ def build(login: str, version: str | None = None) -> dict:
             "progress_items": progress_items(row["thread_id"], row["recovery_turn_id"]),
         } for row in rows],
         "capabilities": {name: capabilities[name] for name in sorted(capabilities)},
-        "note": "Content-free: counts, states and times from this machine's own records; no conversation text, "
-                "identifiers or paths. A report from somebody other than the maintainer is shown apart and "
-                "never raises a version's tier.",
+        "note": "Content-free: counts, states and times from this machine's own records, with no conversation "
+                "text, identifiers or paths, counted only towards the Reported grade beside the version and "
+                "never towards a version's tier.",
     }
 
 
@@ -400,7 +402,7 @@ def cmd_submit(arguments) -> int:
     if not accepting_reports():
         print()
         print("The project is not taking reports yet: %s does not exist on %s's main." % (COMMUNITY, REPO))
-        print("Keep the file. When that folder appears - planned for v0.6.11 - run submit again.")
+        print("Keep the file. When that folder appears - planned for v0.6.10 - run submit again.")
         return 0
     print()
     print("This would open a public pull request on %s adding" % REPO)
@@ -433,8 +435,9 @@ def cmd_submit(arguments) -> int:
     url = gh("pr", "create", "--repo", REPO, "--base", "main", "--head", "%s:%s" % (login, branch),
              "--title", "Compatibility report: %s (%s)" % (report["codex_version"], login),
              "--body", "Written by codex-compat-reporter %s from my own machine's records. Counts, states and "
-                       "times only. I understand a community report is shown apart from the maintainer's "
-                       "evidence and does not change what the product allows itself to do." % __version__)
+                       "times only. I understand that it counts towards the Reported grade beside the version "
+                       "and nothing else: it raises no version's tier and changes nothing the product allows "
+                       "itself to do." % __version__)
     print("opened:", url)
     return 0
 

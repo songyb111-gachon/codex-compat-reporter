@@ -48,21 +48,27 @@ field, and the report itself for the rest - it is yours to read before it is any
 A report is a measurement, not a verdict. When one arrives, the project recomputes every derived
 field from the records in it, so a conclusion edited by hand does not survive the trip.
 
-- Community reports are **kept and shown apart** from the maintainer's own evidence.
-- They **never raise a version's tier** to Verified or Checked, and never change what the product
-  allows itself to do on anyone's machine. A version's tier still comes from evidence the
+Community reports have a grade of their own: **Reported**. What is known about a Codex version is
+said with four words, and they are a ladder - *verified*, *checked*, *compatible* and *failed
+here*. Reported is not one of them and never becomes one. It is shown beside the version, as its
+own grade, with the number of machines that said the same thing: N reported it working, M reported
+a failure, K reported nothing either way.
+
+- A version whose own evidence says nothing stays **compatible** however many reports arrive.
+- Reports **never raise a version's tier** to Verified or Checked, and never change what the
+  product allows itself to do on anyone's machine. A version's tier still comes from evidence the
   maintainer recorded, and from your own installation's local checks.
 - What they do is show that a version behaved - or did not - somewhere other than one machine. A
   version that fails for you is the most useful report there is.
 
 Nothing here can prove a file was not written by hand on the machine that sent it. That is why
-community reports are shown apart and are not allowed to grant anything, rather than checked with
-ceremony and then trusted.
+Reported stands beside the ladder and grants nothing, rather than being checked with ceremony and
+then trusted. [The format](docs/REPORT_FORMAT.md) says exactly how a report is counted.
 
 ## Where it is going
 
 The receiving side - the project showing these reports next to a version - is planned for the
-product's v0.6.11. Until the folder `docs/evidence/community/` exists on the product's main branch,
+product's v0.6.10. Until the folder `docs/evidence/community/` exists on the product's main branch,
 `submit` says so and stops, and `report` still works: keep the file and send it when the door opens.
 
 MIT licensed. Issues and pull requests are welcome, in English or Korean.
