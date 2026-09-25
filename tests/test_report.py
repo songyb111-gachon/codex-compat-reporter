@@ -9,6 +9,7 @@ strangers. What it promises, and where each promise is held:
 - it reads the machine and never writes to it (StateDatabaseTests, ReadOnlyTests),
 - what is sent is exactly the file the person read, and only after they said yes (SubmitTests),
 - a file the project would refuse is refused here first (ValidateTests),
+- nothing it starts puts a console window on the screen (NoConsoleWindowTests),
 - the command line says what happened, in words and in its exit code (CliTests).
 
 Everything runs on synthetic installations in temporary folders; nothing here reads this
@@ -993,6 +994,37 @@ class ReadOnlyTests(unittest.TestCase):
                 with mock.patch.object(reporter.subprocess, "run", FakeGh(str(exe))):
                     self.assertEqual(run_main("submit", "--dry-run")[0], 0)
             self.assertEqual(installation.snapshot(), before)
+
+
+class NoConsoleWindowTests(unittest.TestCase):
+    """Nothing the reporter starts may put a console window on the screen - from a terminal, or from a
+    program with no console of its own (pythonw, or a window that runs this code), where a console
+    program started plainly opens a window of its own and hands it to everything it starts.
+
+    Held here by reading the source, since no test here starts a real process (setUpModule). The
+    mechanism itself - a console program given CREATE_NO_WINDOW under pythonw, and git started by it,
+    show nothing - was measured on Windows 11 on 2026-09-26, and is held by codex-compat-admin's
+    NoConsoleWindowTests, which runs the real chain."""
+
+    def calls(self):
+        tree = ast.parse(pathlib.Path(reporter.__file__).read_text(encoding="utf-8"))
+        return [node for node in ast.walk(tree) if isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute) and node.func.attr in ("run", "Popen", "call",
+                                                                                  "check_call", "check_output")
+                and getattr(node.func.value, "id", None) == "subprocess"]
+
+    def test_every_process_it_starts_is_given_a_hidden_console(self):
+        calls = self.calls()
+        self.assertTrue(calls)
+        for call in calls:
+            flags = [keyword.value for keyword in call.keywords if keyword.arg == "creationflags"]
+            self.assertEqual(len(flags), 1, ast.unparse(call))
+            self.assertIn("CREATE_NO_WINDOW", ast.unparse(flags[0]))
+
+    def test_it_starts_no_python_child(self):
+        """A Python child would be started with sys.executable, and under pythonw that has no console to
+        hand down to what it starts in turn."""
+        self.assertEqual([ast.unparse(call) for call in self.calls() if "executable" in ast.unparse(call)], [])
 
 
 class CliTests(unittest.TestCase):
