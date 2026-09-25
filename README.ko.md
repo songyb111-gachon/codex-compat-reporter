@@ -10,38 +10,140 @@ JSON 파일 하나로 만들어 프로젝트에 보내는 작은 윈도우 도�
 관리자 PC 한 대의 기록만 들어갑니다. 한 대, 한 가지 사용 방식입니다. 이 도구는 다른 PC도 말할 수
 있게 하는 통로입니다.
 
-## 하는 일
+## 받기
+
+표준 라이브러리만 쓰는 파이썬 파일 하나이고, 설치할 것은 없습니다. 저장소를 받아 그 폴더에서
+실행하거나,
 
 ```
-py codex_compat_report.py status                          # 이 PC가 보여 줄 수 있는 것
-py codex_compat_report.py report --login <내 깃허브 아이디>   # 보고서를 파일로 쓰고, 읽어 보기
-py codex_compat_report.py submit --login <내 깃허브 아이디>   # 그 파일로 PR 열기
+git clone https://github.com/songyb111-gachon/codex-compat-reporter
+cd codex-compat-reporter
 ```
 
-`status`는 설치된 제품 버전, 제품이 보고 있는 Codex 버전, 이 PC에 남은 복구 기록 수, 이 버전에서
-제품 자체 점검이 통과했는지를 보여 줍니다. `report`는 지금 폴더에 `codex-cli-<버전>.json`을 씁니다.
-**그 파일을 먼저 읽어 보세요.** 짧고 평범한 문서이고, 무엇을 보내는지 확실히 아는 방법은 그것뿐입니다.
-`submit`은 공개 PR을 열며, `--yes`를 붙이기 전에는 열지 않습니다.
+[`codex_compat_report.py`](https://raw.githubusercontent.com/songyb111-gachon/codex-compat-reporter/main/codex_compat_report.py)
+파일만 따로 만든 폴더에 저장하고 그 폴더에서 터미널을 여세요. 보고서는 실행한 폴더에 써집니다.
 
-윈도우, Python 3.11 이상, 설치된 Codex Auto Resume, 그리고 `submit`에는 로그인된
-[`gh`](https://cli.github.com/)가 필요합니다. 설치할 패키지는 없습니다. 표준 라이브러리만 쓰는 파일
-하나입니다.
+필요한 것:
 
-## 무엇을 읽고, 무엇을 읽지 않는가
+- 윈도우, 그리고 Python 3.11 이상. CI는 Python 3.11, 3.12, 3.13, 3.14에서 테스트를 돌립니다.
+- 설치된 Codex Auto Resume v0.6.0 이상. 감시기가 한 번 이상 돌았어야 합니다.
+- `submit`에만: [GitHub CLI](https://cli.github.com/)가 `gh auth login --hostname github.com`으로
+  로그인되어 있어야 합니다.
 
-모두 읽기 전용으로 열고, 내 PC든 어디든 설정을 바꾸지 않습니다.
+아래 예시는 모두 `python`으로 적었습니다. 파이썬 런처가 설치된 곳(python.org 설치 프로그램이
+넣어 줍니다)에서는 `py`도 똑같이 동작합니다. 마이크로소프트 스토어의 파이썬에는 `python`은 있지만
+`py`는 없습니다.
+
+## 쓰기
+
+```
+python codex_compat_report.py status                             # 이 PC가 보여 줄 수 있는 것
+python codex_compat_report.py report --login <내 깃허브 아이디>   # 보고서 쓰기
+                                                                 # ...이제 파일을 열어 읽어 보기
+python codex_compat_report.py submit <그 파일> --dry-run          # 모두 확인하고, 보내지는 않기
+python codex_compat_report.py submit <그 파일> --yes              # PR 열기
+```
+
+`report`는 `codex-cli-<버전>.json`을 씁니다. **그 파일을 먼저 읽어 보세요.** 짧고 평범한 문서이고,
+무엇을 보내는지 확실히 아는 방법은 그것뿐입니다. `submit`은 지정한 파일의 바이트를 실행하는 그 순간
+그대로 보냅니다. 보고서를 다시 만들지 않고, 파일을 고치지도 않습니다. 파일을 직접 고쳤다면 저장한
+그대로가 보내집니다. 다만 [형식](docs/REPORT_FORMAT.md)을 벗어난 파일은 PC 밖으로 무엇이든 나가기
+전에 거절됩니다.
+
+### 명령과 옵션
+
+| 명령과 옵션 | 하는 일 |
+| --- | --- |
+| `status` | 설치된 제품 버전, 제품이 보고 있는 Codex 버전, 이 PC의 기록 수(이 Codex 버전, 다른 버전, 어느 버전에도 놓지 못한 기록과 그 이유), 기록 지우기로 숨긴 기록 수, 이 버전에서 제품 자체 점검이 통과했는지를 보여 줍니다. 아무것도 쓰지 않습니다. |
+| `report --login 아이디` | 지금 설치된 Codex 버전에 대한 보고서를, 내 깃허브 아이디로 씁니다. 필수입니다. |
+| `report --codex-version 버전` | 이 PC에 기록이 있는 다른 Codex 버전을 보고합니다. `0.155.0`이나 `codex-cli 0.155.0`처럼 적습니다. `--version`도 같은 옵션입니다. |
+| `report --out 파일` | 지금 폴더의 `codex-cli-<버전>.json` 대신 지정한 파일에 씁니다. 붙인 이름은 내 PC에만 남습니다. `submit`을 보세요. |
+| `report --force` | 이미 있는 파일을 덮어씁니다. 이것 없이는 `report`가 거절하므로, 읽어 본 파일이 몰래 바뀌는 일은 없습니다. |
+| `submit [파일]` | 파일을 보냅니다. 파일을 주지 않으면 지금 폴더의 `codex-cli-*.json` 하나를 쓰고, 없거나 둘 이상이면 거절합니다. `--yes`도 `--dry-run`도 없으면 모두 확인하고 할 일을 보여 준 뒤, 아무것도 보내지 않고 종료 코드 2로 끝납니다. |
+| `submit --dry-run` | 모두 확인하고, 무엇을 쓸지 말하고, 멈춥니다(종료 코드 0). 아래의 읽기 전용 질문은 GitHub에 합니다. |
+| `submit --yes` | 예: 아래에 적은 대로 GitHub에 쓰고 PR을 엽니다. |
+| `submit --login 아이디` | 파일이 그 아이디로 되어 있지 않으면 거절합니다. |
+| `submit --sha256 HEX` | 파일의 SHA-256이 HEX(`report`가 출력한 값)가 아니면 거절합니다. 읽어 본 그 파일인지 확인하는 방법입니다. |
+| `--version`, `--help` | 도구 자체의 버전과 도움말입니다. 아무것도 읽지 않습니다. |
+
+### 종료 코드
+
+| 코드 | 뜻 |
+| --- | --- |
+| 0 | 끝남: `status`가 출력했거나, `report`가 파일을 썼거나, `submit --dry-run`이 모두 확인했거나, `submit --yes`가 PR을 열었습니다. |
+| 1 | 예상하지 못한 오류, 곧 버그입니다. 출력된 내용과 함께 이슈를 열어 주세요. |
+| 2 | 거절: 이유와 할 일이 오류 출력에 있고, 아무것도 쓰거나 보내지 않았습니다. 명령줄을 잘못 적었을 때도 2입니다. |
+| 3 | `submit`: 프로젝트가 아직 보고서를 받지 않습니다. 아무것도 보내지 않았으니 파일을 두세요. |
+
+## 무엇을 읽는가
+
+모두 내 PC에서 읽기 전용으로 엽니다. 설치 폴더는 `CODEX_AUTO_RESUME_HOME`이 다른 폴더를 가리키지
+않는 한 `%USERPROFILE%\.codex-auto-resume`이고, Codex 홈은 `CODEX_HOME`이 가리키지 않는 한
+`%USERPROFILE%\.codex`입니다.
 
 | 읽는 것 | 쓰임 |
 | --- | --- |
-| `~/.codex-auto-resume/config/state.sqlite` | 복구를 언제 감지하고 언제 넣었고 어떻게 끝났는지 |
-| `~/.codex-auto-resume/logs/auto-resume.log` | 각 기록 앞뒤로 어떤 Codex 버전이 깔려 있었는지, 제품 자체 점검이 통과했는지 |
-| `~/.codex-auto-resume/config/compatibility.json` | 감시기가 이 Codex에 대해 스스로 내린 판단 |
-| `~/.codex/thread_history_*.sqlite` | 복구된 턴이 만들어 낸 항목이 종류별로 몇 개인지 |
+| `.codex-auto-resume\app\.codex-plugin\plugin.json` | 설치된 제품 버전 |
+| `.codex-auto-resume\config\state.sqlite` | 복구 기록: 언제 감지하고 언제 넣었고 어떻게 끝났는지, 범주·상태·이유, 통과한 게이트, 그리고 아래 개수를 세는 데 쓰는 스레드·턴 식별자. 기록 지우기로 숨긴 기록은 빼고 읽습니다. |
+| `.codex-auto-resume\logs\auto-resume.log`와 `auto-resume.log.1`~`.5` | 각 기록 앞뒤로 어떤 Codex 버전이 돌고 있었는지, 그 버전에서 제품 자체 점검이 통과했는지 |
+| `.codex-auto-resume\config\compatibility.json` | 감시기가 지금 설치된 Codex에 대해 스스로 내린 판단 |
+| `.codex\thread_history_*.sqlite` (가장 새 것) | 복구된 턴이 만들어 낸 항목이 종류별로 몇 개인지 |
 
-대화 내용, 턴·스레드 식별자, 파일 경로, 폴더 이름, 윈도우 사용자 이름, Codex 계정, 내가 입력한 것은
-읽지도 담지도 않습니다. 파일에 들어가는 자유 문자열은 내가 직접 넣는 깃허브 아이디 하나뿐입니다.
-필드 하나하나는 [형식 문서](docs/REPORT_FORMAT.md)에, 나머지는 보고서 자체에 있습니다. 받는 사람보다
-먼저 읽을 수 있는 것이 요점입니다.
+스레드·턴 식별자와 이 파일들의 경로는 읽기는 하지만 내 PC 안에서만 사용합니다. 보고서에 적히지
+않고, 보내지지도 않습니다. 대화 자체를 지나가는 질의는 하나입니다. 복구된 턴이 만든 것을 세기
+위해, SQLite가 Codex 기록에서 그 턴의 항목을 읽고 종류별 개수만 돌려줍니다. 내용은 돌려주지
+않습니다. 제품도 같은 일을 하며, 제품의
+[개인정보 문서](https://github.com/songyb111-gachon/codex-auto-resume-windows/blob/ko/docs/PRIVACY.md)에
+그렇게 적혀 있습니다.
+
+내 PC에 쓰는 것은 보고서 파일뿐이고, `submit --yes` 동안에만 업로드할 내용의 임시 사본을 임시
+폴더에 두었다가 보내는 즉시 지웁니다. WAL 모드인 SQLite 데이터베이스를 읽으면 SQLite가 공유 메모리
+색인(`-shm` 파일)을 갱신할 수 있습니다. 제품 자체의 읽기도 마찬가지이고, 데이터베이스 자체에는
+아무것도 쓰지 않습니다.
+
+## 보고서에 담기는 것, 공개되는 것
+
+공개되는 것은 그 파일이고, 그 밖에는 없습니다. PR은 파일을 영구히 공개합니다. 담기는 것은:
+
+- 내 깃허브 아이디, 이 도구의 버전, Codex Auto Resume 버전, 윈도우 빌드 번호(`10.0.26200` 같은);
+- 보고 대상 Codex 버전;
+- 기록마다: 범주·상태·이유·턴 상태(모두 제품이 쓰는 낱말이고, 도구가 모르는 낱말은 `other`),
+  통과한 게이트 수, 복구된 턴이 만든 항목의 종류별 개수;
+- 기능마다: 확인되거나 놓친 기록 수와, 그것이 보여 주는 단계;
+- 이 PC에서 제품 자체 점검이 몇 번, 무엇에 대해 통과했는지;
+- 시각. 모두 UTC이고 초 단위이며 기록된 그대로입니다: 파일을 쓴 시각, 각 기록을 감지하고 넣고
+  끝난 시각, 각 기능이 마지막으로 확인된 시각, 제품 자체 점검이 처음과 마지막으로 통과한 시각.
+  이 시각들을 모으면 내 PC에서 제품이 언제 바빴는지가 드러납니다.
+
+대화 내용, 스레드·턴 식별자, 파일 경로, 폴더 이름, 윈도우 사용자 이름, Codex 계정, 내가 입력한
+것은 담지 않습니다. 파일에 들어가는 자유 문자열은 내가 직접 넣는 아이디 하나뿐입니다.
+[형식 문서](docs/REPORT_FORMAT.md)에 필드가 모두 있습니다.
+
+## `submit`이 GitHub에서 하는 일
+
+`PATH`에 있는 폴더의 `gh.exe`만 씁니다. 지금 폴더의 것은 절대 쓰지 않습니다. 모든 호출에
+`github.com`을 명시하므로, 다른 서버를 가리키는 `GH_HOST`는 쓰이지 않습니다. `gh`가 로그인한
+계정으로 동작하며, `public_repo` 권한이 있는 토큰이면 충분합니다.
+
+먼저 GitHub에 읽기 전용 질문을 합니다. `--dry-run`일 때도, `--yes`가 없을 때도 합니다: `gh`가
+로그인되어 있는지와 누구로 되어 있는지(파일의 아이디와 같아야 합니다), 프로젝트가 보고서를 받는지
+(main 브랜치에 `docs/evidence/community/` 폴더가 있는지), 이 Codex 버전에 대한 내 보고서가 이미
+들어가 있거나 내가 연 PR로 기다리고 있는지, 내게 프로젝트의 포크가 있는지와 그 포크에 아래 브랜치가
+있는지, 프로젝트의 main이 어느 커밋인지.
+
+`--yes`가 있을 때만, 내 이름으로 씁니다:
+
+1. `songyb111-gachon/codex-auto-resume-windows`의 포크를 내 계정에 - 아직 없을 때만. 공개이고,
+   내가 지우기 전까지 남습니다.
+2. 포크에 `compat-report/codex-cli-<버전>` 브랜치를, 프로젝트 main에서 만듭니다(이전 시도가 남긴
+   브랜치가 있으면 main으로 되돌립니다).
+3. 그 브랜치에 커밋 하나: 내 파일의 바이트 그대로를
+   `docs/evidence/community/<내 아이디>/codex-cli-<버전>.json`으로 더합니다.
+4. 프로젝트에 공개 PR 하나. PR은 되돌려 비공개로 만들 수 없습니다.
+
+프로젝트 안의 이름은 내 PC에서 파일을 무엇이라 불렀든 언제나 내 아이디 아래의
+`codex-cli-<버전>.json`입니다. 보고서는 깃허브 아이디 하나당 Codex 버전 하나에 하나입니다. 이미
+들어가 있거나 PR이 열려 있으면 `submit`이 거절합니다.
 
 ## 보고서가 할 수 있는 일과 없는 일
 
@@ -68,7 +170,8 @@ py codex_compat_report.py submit --login <내 깃허브 아이디>   # 그 파�
 ## 앞으로
 
 받는 쪽 – 프로젝트가 이 보고서들을 버전 옆에 보여 주는 일 – 은 제품 v0.6.10에 들어갈 예정입니다.
-제품 저장소 main에 `docs/evidence/community/` 폴더가 생기기 전까지 `submit`은 그렇다고 말하고
-멈춥니다. `report`는 지금도 동작하니, 파일을 두었다가 문이 열리면 보내면 됩니다.
+제품 저장소 main에 `docs/evidence/community/` 폴더가 생기기 전까지 `submit`은 그렇다고 말하고,
+아무것도 보내지 않은 채 종료 코드 3으로 끝납니다. `report`는 지금도 동작하니, 파일을 두었다가 문이
+열리면 보내면 됩니다.
 
 MIT 라이선스입니다. 이슈와 PR은 한국어로도 영어로도 환영합니다.
