@@ -74,7 +74,7 @@ machine.
 | --- | --- |
 | 0 | Done: `status` printed, `report` wrote the file, `submit --dry-run` checked everything, or `submit --yes` opened the pull request. |
 | 1 | An unexpected error - a bug. Please open an issue with what it printed. |
-| 2 | Refused, with the reason and what to do on the error output; nothing was written or sent. Also a mistake in the command line. |
+| 2 | Refused, with the reason and what to do on the error output. Nothing was written or sent - except under `submit --yes`, where a step on GitHub can fail after earlier ones have written (the fork, the branch, the uploaded file). The message then lists what that run wrote, and running `submit` again is safe: it keeps the fork, resets the branch to the project's main and adds the file again. Also a mistake in the command line. |
 | 3 | `submit`: the project is not taking reports yet. Nothing was sent; keep the file. |
 
 ## What it reads
@@ -147,6 +147,11 @@ Only with `--yes` does it write, as you:
 3. one commit on that branch adding the exact bytes of your file as
    `docs/evidence/community/<your login>/codex-cli-<version>.json`;
 4. one public pull request to the project. A pull request cannot be unpublished.
+
+GitHub takes a moment to copy a new fork, so `submit` waits up to a minute for it before making
+the branch. If a step fails part-way, what the earlier steps wrote stays on GitHub and the refusal
+lists it. Running `submit` again is safe: it keeps the fork, resets the branch to the project's
+main and adds the file again.
 
 The name in the project is always `codex-cli-<version>.json` under your login, whatever you called
 the file on your machine. There is one report per GitHub login per Codex version: `submit` refuses

@@ -56,6 +56,7 @@ __version__ = "1.1.0"
 REPO = "songyb111-gachon/codex-auto-resume-windows"
 HOST = "github.com"                             # every GitHub call names it; GH_HOST never redirects one
 COMMUNITY = "docs/evidence/community"          # where a report goes on the product repository
+FORK_WAITS, FORK_WAIT_SECONDS = 20, 3            # how long a new fork is given to be copied
 FORMAT = "codex-auto-resume-compat-evidence/1"  # the maintainer's own evidence format, unchanged
 HOME = pathlib.Path(os.environ.get("USERPROFILE") or pathlib.Path.home())
 PRODUCT = pathlib.Path(os.environ.get("CODEX_AUTO_RESUME_HOME") or (HOME / ".codex-auto-resume"))
@@ -342,7 +343,11 @@ def placement(timeline, start, end, current):
         return None, "the engine changed while it ran"
     after = [other for when, other in timeline if when >= end]
     if after:
-        return (version, None) if after[0] == version else (None, "the engine changed while it ran")
+        if after[0] == version:
+            return version, None
+        # No line inside names another version, so all that is known is that another had taken
+        # over by the next line - while the record ran, or after it.
+        return None, "the next engine line after it names another version"
     return (version, None) if version == current else (None, "the engine changed after it")
 
 
@@ -839,6 +844,58 @@ def pick_file(given):
         "This folder has %d: %s." % (len(found), ", ".join(path.name for path in found))))
 
 
+def _write(github, report, raw, login, fork, branch, target, base, has_fork, has_branch, written) -> str:
+    """The writes of submit --yes, in order; each one done is added to `written`."""
+    if not has_fork:
+        made = github.must(github.api("POST", "repos/%s/forks" % REPO, "--jq", ".full_name"), "the fork")
+        if made != fork:
+            raise Refused("GitHub answered with the fork %s, not %s - an older fork under another name? "
+                          "Nothing more was written. Rename it to %s, or delete it, and run submit again."
+                          % (made, fork, fork))
+        written.append("the fork " + fork)
+        # A new fork answers as a repository before GitHub has copied its git data into it, and a
+        # branch cannot be made until it has: wait for its main, not for its name.
+        for _attempt in range(FORK_WAITS):
+            if github.api("GET", "repos/%s/git/ref/heads/main" % fork, "--jq", ".object.sha")[0] == 0:
+                break
+            time.sleep(FORK_WAIT_SECONDS)
+        else:
+            raise Refused("GitHub has made %s but has not finished copying the project into it. "
+                          "Run submit again in a minute." % fork)
+    if has_branch:
+        github.must(github.api("PATCH", "repos/%s/git/refs/heads/%s" % (fork, branch),
+                               "-f", "sha=" + base, "-F", "force=true"), "the branch reset")
+        written.append("the branch %s, reset to the project's main" % branch)
+    else:
+        github.must(github.api("POST", "repos/%s/git/refs" % fork,
+                               "-f", "ref=refs/heads/" + branch, "-f", "sha=" + base), "the branch")
+        written.append("the branch " + branch)
+    folder = tempfile.mkdtemp(prefix="codex-compat-report-")
+    try:
+        upload = os.path.join(folder, "upload.json")
+        with open(upload, "w", encoding="ascii") as handle:
+            json.dump({"message": "Compatibility report for %s from %s" % (report["codex_version"], login),
+                       "branch": branch, "content": base64.b64encode(raw).decode("ascii")}, handle)
+        github.must(github.api("PUT", "repos/%s/contents/%s" % (fork, target), "--input", upload),
+                    "the file")
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)
+    written.append("the file %s on that branch" % target)
+    return github.must(github.run(
+        "pr", "create", "--repo", "%s/%s" % (HOST, REPO), "--base", "main", "--head", "%s:%s" % (login, branch),
+        "--title", "Compatibility report: %s (%s)" % (report["codex_version"], login),
+        "--body", "Written by codex-compat-reporter %s from my own machine's records. Counts, states and "
+                  "times only. I understand that it counts towards the Reported grade beside the version "
+                  "and nothing else: it raises no version's tier and changes nothing the product allows "
+                  "itself to do." % report["reporter"]["tool_version"]), "the pull request")
+
+
+# The times a report publishes, in the words README.md uses for them.
+PUBLISHED_TIMES = ("when the file was written, when each record was detected, delivered and ended, when "
+                   "each capability was last confirmed, and the first and last time the product's checks "
+                   "passed")
+
+
 def cmd_submit(arguments) -> int:
     path = pick_file(arguments.file)
     try:
@@ -863,8 +920,7 @@ def cmd_submit(arguments) -> int:
     print("bytes       : %d, SHA-256 %s" % (len(raw), digest))
     print("report      : %s, %d records (%s), verdict %s"
           % (report["codex_version"], len(report["records"]), time_span(report), report["verdict"]))
-    print("times       : published as written, UTC to the second - when the file was written, when each "
-          "record was detected, delivered and ended, and the first and last local-check pass")
+    print("times       : published exactly as recorded, UTC to the second - %s" % PUBLISHED_TIMES)
     print("left out    : records hidden with Clear history, when the file was written")
     print("destination : %s, pull request from %s:%s" % (REPO, login, branch))
     print("              adding %s" % target)
@@ -938,41 +994,15 @@ def cmd_submit(arguments) -> int:
     if not arguments.yes:
         raise Refused("Nothing was sent. Add --yes when you have read the file and want it public.")
 
-    if not has_fork:
-        made = github.must(github.api("POST", "repos/%s/forks" % REPO, "--jq", ".full_name"), "the fork")
-        if made != fork:
-            raise Refused("GitHub answered with the fork %s, not %s - an older fork under another name? "
-                          "Nothing more was written. Rename it to %s, or delete it, and run submit again."
-                          % (made, fork, fork))
-        for _attempt in range(10):                      # a brand new fork takes a moment to exist
-            if github.api("GET", "repos/" + fork, "--jq", ".full_name")[0] == 0:
-                break
-            time.sleep(3)
-        else:
-            raise Refused("GitHub has not finished making %s. Run submit again in a minute." % fork)
-    if has_branch:
-        github.must(github.api("PATCH", "repos/%s/git/refs/heads/%s" % (fork, branch),
-                               "-f", "sha=" + base, "-F", "force=true"), "the branch reset")
-    else:
-        github.must(github.api("POST", "repos/%s/git/refs" % fork,
-                               "-f", "ref=refs/heads/" + branch, "-f", "sha=" + base), "the branch")
-    folder = tempfile.mkdtemp(prefix="codex-compat-report-")
+    written = []                                        # what is on GitHub now that was not before
     try:
-        upload = os.path.join(folder, "upload.json")
-        with open(upload, "w", encoding="ascii") as handle:
-            json.dump({"message": "Compatibility report for %s from %s" % (report["codex_version"], login),
-                       "branch": branch, "content": base64.b64encode(raw).decode("ascii")}, handle)
-        github.must(github.api("PUT", "repos/%s/contents/%s" % (fork, target), "--input", upload),
-                    "the file")
-    finally:
-        shutil.rmtree(folder, ignore_errors=True)
-    url = github.must(github.run(
-        "pr", "create", "--repo", "%s/%s" % (HOST, REPO), "--base", "main", "--head", "%s:%s" % (login, branch),
-        "--title", "Compatibility report: %s (%s)" % (report["codex_version"], login),
-        "--body", "Written by codex-compat-reporter %s from my own machine's records. Counts, states and "
-                  "times only. I understand that it counts towards the Reported grade beside the version "
-                  "and nothing else: it raises no version's tier and changes nothing the product allows "
-                  "itself to do." % report["reporter"]["tool_version"]), "the pull request")
+        url = _write(github, report, raw, login, fork, branch, target, base, has_fork, has_branch, written)
+    except Refused as refused:
+        if not written:
+            raise
+        raise Refused("%s\nAlready written to GitHub by this run: %s. Running submit again is safe: it "
+                      "keeps the fork, resets the branch to the project's main and adds the file again."
+                      % (refused, "; ".join(written))) from None
     print("opened:", url)
     return EXIT_OK
 

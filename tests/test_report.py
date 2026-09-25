@@ -340,6 +340,15 @@ class AttributionTests(unittest.TestCase):
         self.assertEqual(reporter.placement(timeline, 120, 200, "codex-cli 1")[1],
                          "the engine changed while it ran")
 
+    def test_a_record_the_next_line_disowns_says_so_rather_than_that_it_changed_while_it_ran(self):
+        timeline = [(100, "codex-cli 1"), (300, "codex-cli 2")]
+        self.assertEqual(reporter.placement(timeline, 120, 200, "codex-cli 2"),
+                         (None, "the next engine line after it names another version"))
+        self.assertEqual(reporter.placement(timeline, 120, 200, "codex-cli 1"),
+                         (None, "the next engine line after it names another version"))
+        self.assertEqual(reporter.placement([(100, "codex-cli 1")], 120, 200, "codex-cli 2"),
+                         (None, "the engine changed after it"))
+
     def test_only_this_versions_records_are_reported(self):
         words = reporter.ENGINE_LOG_WORDS["structurally_compatible"]
         lines = [engine_line(NOW - 9000, "codex-cli 0.150.0", words), engine_line(NOW - 5000, VERSION, words)]
@@ -620,13 +629,15 @@ class FakeGh:
     """
 
     def __init__(self, exe, *, signed_in=True, login=LOGIN, door=True, filed=False, open_prs=(),
-                 fork=False, branch=False, answers=None):
+                 fork=False, branch=False, copying=0, answers=None):
         self.exe, self.signed_in, self.login = exe, signed_in, login
         self.door, self.filed, self.open_prs, self.fork, self.branch = door, filed, list(open_prs), fork, branch
+        self.copying = copying          # how many looks at a new fork's main find it not yet copied
         self.answers = dict(answers or {})
         self.calls, self.environments, self.uploads = [], [], []
 
     NOT_FOUND = (1, '{"message":"Not Found","status":"404"}', "gh: Not Found (HTTP 404)")
+    EMPTY = (1, '{"message":"Git Repository is empty.","status":"409"}', "gh: Git Repository is empty. (HTTP 409)")
 
     @staticmethod
     def key(arguments):
@@ -663,6 +674,8 @@ class FakeGh:
                                                       "parent": {"full_name": REPO}}), "") if self.fork else self.NOT_FOUND,
             ("GET", "repos/%s/git/ref/heads/%s" % (FORK, branch)): (0, "{}", "") if self.branch else self.NOT_FOUND,
             ("GET", "repos/%s/git/ref/heads/main" % REPO): (0, SHA, ""),
+            ("GET", "repos/%s/git/ref/heads/main" % FORK): (self.EMPTY if self.copying > 0 else (0, SHA, ""))
+                                                           if self.fork else self.NOT_FOUND,
             ("POST", "repos/%s/forks" % REPO): (0, FORK, ""),
             ("POST", "repos/%s/git/refs" % FORK): (0, "{}", ""),
             ("PATCH", "repos/%s/git/refs/heads/%s" % (FORK, branch)): (0, "{}", ""),
@@ -673,6 +686,8 @@ class FakeGh:
             raise AssertionError("an unexpected call to GitHub: %r" % (arguments,))
         if key == ("POST", "repos/%s/forks" % REPO):
             self.fork = True
+        if key == ("GET", "repos/%s/git/ref/heads/main" % FORK) and self.fork:
+            self.copying -= 1
         if key[0] == "PUT":
             with open(arguments[arguments.index("--input") + 1], encoding="ascii") as handle:
                 self.uploads.append(json.load(handle))
@@ -700,7 +715,7 @@ class SubmitTests(unittest.TestCase):
         self.stack.enter_context(contextlib.chdir(self.work))
         self.stack.enter_context(mock.patch.dict(os.environ, {"PATH": ".;;relative\\bin;" + str(self.bin),
                                                               "GH_HOST": "ghe.example.com"}))
-        self.stack.enter_context(mock.patch.object(reporter.time, "sleep"))
+        self.sleep = self.stack.enter_context(mock.patch.object(reporter.time, "sleep"))
         code, out, err = run_main("report", "--login", LOGIN)
         self.assertEqual(code, 0, err)
         self.file = self.work / "codex-cli-0.155.0-alpha.9.2.json"
@@ -733,7 +748,7 @@ class SubmitTests(unittest.TestCase):
             ("GET", "repos/" + FORK),
             ("GET", "repos/%s/git/ref/heads/main" % REPO),
             ("POST", "repos/%s/forks" % REPO),
-            ("GET", "repos/" + FORK),
+            ("GET", "repos/%s/git/ref/heads/main" % FORK),
             ("POST", "repos/%s/git/refs" % FORK),
             ("PUT", "repos/%s/contents/%s" % (FORK, path)),
             ("pr create",),
@@ -857,6 +872,44 @@ class SubmitTests(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn("HTTP 422", err)
         self.assertNotIn("PUT", [key[0] for key in gh.verbs()])
+        self.assertIn("Already written to GitHub by this run: the fork %s." % FORK, err)
+        self.assertIn("Running submit again is safe", err)
+
+    def test_a_new_fork_is_given_time_to_be_copied_before_its_branch_is_made(self):
+        gh, code, _out, err = self.submit(str(self.file), "--yes", copying=3)
+        self.assertEqual(code, 0, err)
+        looks = [n for n, key in enumerate(gh.verbs()) if key == ("GET", "repos/%s/git/ref/heads/main" % FORK)]
+        self.assertEqual(len(looks), 4)
+        self.assertEqual(gh.verbs()[looks[-1] + 1], ("POST", "repos/%s/git/refs" % FORK))
+        self.assertEqual(self.sleep.call_count, 3)
+
+    def test_a_new_fork_never_copied_is_refused_saying_what_was_written(self):
+        gh, code, _out, err = self.submit(str(self.file), "--yes", copying=10 ** 6)
+        self.assertEqual(code, 2)
+        self.assertEqual(self.sleep.call_count, reporter.FORK_WAITS)
+        self.assertEqual(gh.writes(), [("POST", "repos/%s/forks" % REPO)])
+        self.assertIn("has not finished copying", err)
+        self.assertIn("Already written to GitHub by this run: the fork %s." % FORK, err)
+
+    def test_a_failed_pull_request_lists_what_was_written_and_a_second_run_finishes_it(self):
+        gh, code, _out, err = self.submit(str(self.file), "--yes",
+                                          answers={("pr create",): (1, "", "gh: Validation Failed (HTTP 422)")})
+        self.assertEqual(code, 2)
+        path, branch = reporter.destination(VERSION, LOGIN)
+        self.assertIn("HTTP 422", err)
+        self.assertIn("Already written to GitHub by this run: the fork %s; the branch %s; the file %s on "
+                      "that branch." % (FORK, branch, path), err)
+        gh, code, out, err = self.submit(str(self.file), "--yes", fork=True, branch=True)
+        self.assertEqual(code, 0, err)
+        self.assertEqual([key[0] for key in gh.writes()], ["PATCH", "PUT", "pr create"])
+        self.assertEqual(self.uploaded(gh), self.reviewed)
+
+    def test_a_refusal_before_any_write_does_not_speak_of_writes(self):
+        for fake in ({"filed": True}, {"login": "somebody-else"}, {}):
+            with self.subTest(fake):
+                _gh, code, _out, err = self.submit(str(self.file), *(("--yes",) if fake else ()), **fake)
+                self.assertEqual(code, 2)
+                self.assertNotIn("Already written", err)
 
     def test_gh_that_cannot_be_started_is_a_refusal(self):
         gh, code, _out, err = self.submit(str(self.file), "--yes",
@@ -912,6 +965,14 @@ class SubmitTests(unittest.TestCase):
                       out)
         self.assertIn("gh          : %s, host github.com, signed in as someone" % self.exe, out)
         self.assertIn("1 records (", out)
+        self.assertIn("when each capability was last confirmed", out)
+
+    def test_the_summary_lists_the_times_the_readme_says_are_published_word_for_word(self):
+        _gh, code, out, _err = self.submit(str(self.file), "--dry-run")
+        self.assertEqual(code, 0)
+        self.assertIn(reporter.PUBLISHED_TIMES, out)
+        readme = " ".join((HERE.parent / "README.md").read_text(encoding="utf-8").split())
+        self.assertIn("exactly as recorded: " + reporter.PUBLISHED_TIMES + ".", readme)
 
 
 class ReadOnlyTests(unittest.TestCase):

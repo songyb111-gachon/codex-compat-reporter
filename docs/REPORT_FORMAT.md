@@ -108,6 +108,9 @@ falls back.
   named for the report's own `codex_version`, by the login in `reporter.github_login`;
 - a second report for the same login and the same Codex version, or a change to a file already
   there. Reports are add-only: one per GitHub login per Codex version.
+- a copy: a report with at least one record whose records - their times and states, in order -
+  equal those of a report already filed for the same Codex version. A report with no records has
+  nothing to copy and is never refused as one; many machines will honestly have nothing to show.
 
 ## Why it is not trusted further
 
