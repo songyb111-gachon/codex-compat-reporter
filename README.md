@@ -134,9 +134,9 @@ whatever `gh` is signed in as; a token with the `public_repo` scope is enough.
 It asks GitHub these read-only questions first - under `--dry-run`, and without `--yes`, too:
 whether `gh` is signed in, and as whom (it must be the login in the file); whether the project
 takes reports yet (the folder `docs/evidence/community/` on its main branch); whether your report
-for this Codex version is already filed there or waiting in an open pull request of yours; whether
-you have a fork of the project, and whether the branch below is on it; and which commit the
-project's main is at.
+for this Codex version is already filed there; whether any report pull request of yours is still
+open (the project files one per account at a time); whether you have a fork of the project, and
+whether the branch below is on it; and which commit the project's main is at.
 
 Only with `--yes` does it write, as you:
 
@@ -154,8 +154,43 @@ lists it. Running `submit` again is safe: it keeps the fork, resets the branch t
 main and adds the file again.
 
 The name in the project is always `codex-cli-<version>.json` under your login, whatever you called
-the file on your machine. There is one report per GitHub login per Codex version: `submit` refuses
-when yours is already filed or its pull request is open.
+the file on your machine. There is one report per GitHub login per Codex version, and one open
+report pull request per account at a time: `submit` refuses when yours is already filed, or when a
+report pull request of yours is still open. The login may not be a name Windows keeps for a device
+(`con`, `nul`, `com1` and the rest), since no Windows checkout of the project could hold that
+folder, and the Codex version is written the one way the product writes it (`0.155.0`, never
+`00.155.0`).
+
+## What happens after `submit`
+
+Nothing more is needed from you. `submit` ends by saying so, after the pull request's address.
+
+1. **Judged, within minutes.** The project's own check reads your pull request as data - it never
+   runs anything in it - and says on the pull request whether the report passes.
+2. **Filed by the project's code, with no one's step.** A report that passes is filed by the
+   project's filer, usually within minutes and otherwise on its daily run. It judges the report
+   again against the project's main as it is then, and keeps the project's own regeneration of it:
+   every conclusion recomputed from your records, every sentence replaced by the project's. Your
+   bytes are never what is kept.
+3. **Closed, with one comment.** Your pull request is then closed, not merged, because the kept file
+   is the regenerated one. One comment says where the report went. That comment is edited, never
+   repeated, whenever what it says changes.
+
+A report can also wait. The comment then gives the reason and when it is looked at again, and there
+is nothing for you to do:
+
+- an account younger than 30 days: the pull request is closed with the date it can be sent again;
+- another report pull request of yours still open: the newer one is closed, and can be sent again
+  once the first is closed;
+- 3 reports already filed from your account, or 5 for your Codex version, in the last 7 days;
+- a Codex version older than those the project's own data names, or a report of a failure on a
+  version the project's own evidence verifies: the maintainer looks at those first;
+- the project's own tests failing, or filing paused by the maintainer.
+
+A refused pull request's comment says, line by line, what to do about each reason - most often to
+write the report again with the latest reporter and run `submit --yes` again. A new commit on the
+pull request is judged again; one refused and left unchanged for 14 days is closed. A new report is
+welcome any time.
 
 ## What a report can and cannot do
 
@@ -165,8 +200,9 @@ field from the records in it, so a conclusion edited by hand does not survive th
 Community reports have a grade of their own: **Reported**. What is known about a Codex version is
 said with four words, and they are a ladder - *verified*, *checked*, *compatible* and *failed
 here*. Reported is not one of them and never becomes one. It is shown beside the version, as its
-own grade, with the number of machines that said the same thing: N reported it working, M reported
-a failure, K reported nothing either way.
+own grade, with the number of reports that said the same thing: N reported it working, M reported
+a failure, K reported nothing either way. There is one report per GitHub login per Codex version, so
+these are reports, not machines.
 
 - A version whose own evidence says nothing stays **compatible** however many reports arrive.
 - Reports **never raise a version's tier** to Verified or Checked, and never change what the
@@ -179,11 +215,11 @@ Nothing here can prove a file was not written by hand on the machine that sent i
 Reported stands beside the ladder and grants nothing, rather than being checked with ceremony and
 then trusted. [The format](docs/REPORT_FORMAT.md) says exactly how a report is counted.
 
-## Where it is going
+## When the project takes reports
 
-The receiving side - the project showing these reports next to a version - is planned for the
-product's v0.6.10. Until the folder `docs/evidence/community/` exists on the product's main branch,
-`submit` says so, sends nothing and exits with 3, and `report` still works: keep the file and send
-it when the door opens.
+The receiving side is in the product from v0.6.10: its Diagnostics page shows these counts beside a
+version, and the project files a report that passes by itself. Until the folder
+`docs/evidence/community/` exists on the product's main branch, `submit` says so, sends nothing and
+exits with 3, and `report` still works: keep the file and send it when the door opens.
 
 MIT licensed. Issues and pull requests are welcome, in English or Korean.
