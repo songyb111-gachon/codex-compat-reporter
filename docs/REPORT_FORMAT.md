@@ -4,7 +4,9 @@
 community report and the maintainer's evidence can be read side by side without translation.
 
 This page is the contract: what the file holds, and what the project checks before it accepts one.
-Everything here is enforced on both sides, so a refusal is predictable rather than a surprise.
+Everything here is enforced on both sides - by codex-compat-reporter before it writes a file and
+again before it sends one, and by the project when the file arrives - so a refusal is predictable
+rather than a surprise.
 
 ## The envelope
 
@@ -18,8 +20,8 @@ Everything here is enforced on both sides, so a refusal is predictable rather th
 | `reporter` | `github_login`, `tool`, `tool_version`, `product_version`, `windows` (the OS build number, e.g. `10.0.26200`) |
 | `attribution` | the rule by which a record was counted for this version; `window` and `basis` are for a window set by hand and are `null` here |
 | `local_checks` | how many times the product's own checks passed on this version here, when first and last, and which capabilities they cover |
-| `records` | one entry per interruption this machine handled on this version |
-| `capabilities` | per capability: `confirmed`, `missed`, `last_confirmed`, `level` |
+| `records` | one entry per interruption this machine handled on this version, except those hidden with Clear history, which are left out |
+| `capabilities` | per capability: `confirmed`, `missed`, `last_confirmed`, `level` - for the ten capabilities below, and no others |
 | `note` | the file saying what it is |
 
 ## A record
@@ -43,6 +45,22 @@ Three times, four words and five counts. The words are not free text: `category`
 the tool does not recognise is written as `other` rather than copied. That is what keeps a message,
 a path or a name from ever reaching the file by accident, including from a future product version
 this tool has not met.
+
+## The times it publishes
+
+Every time in the file is UTC, to the second, exactly as this machine recorded it - nothing is
+rounded. They are: `recorded_at` (when the file was written); each record's `detected_at`,
+`delivered_at` and `outcome_at`; each capability's `last_confirmed`; and `local_checks.first` and
+`.last`. Together they show when the product was busy on this machine, which is part of what a
+report says; read them before you send it.
+
+## The ten capabilities
+
+A report names only these, in `capabilities` and in `local_checks.covers`: `engine_present`,
+`exact_thread_recovery`, `loaded_state_detection`, `outcome_observation`, `projection_freshness`,
+`recovery_turn_tracking`, `thread_eligibility`, `usage_limit_detection`, `usage_probe`,
+`usage_reset_hint`. The product's own watcher judges sixteen; the other six are not exercised by a
+recovery a record can show, so a report that names one is refused.
 
 ## What a capability entry means
 
@@ -71,7 +89,9 @@ falls back.
      "recovered";
    - counted as "failed" when at least one delivered record ended in "recovery_turn_failed",
      "failed" or "terminal_failure";
-   - counted as "neither" when nothing was delivered.
+   - counted as "neither" when no delivered record ended in either - which includes a report with
+     no records at all. Such a report is legitimate: it says the product's checks passed (or did
+     not) on this version here, and that no recovery happened to show more.
 
    One report can be counted in both columns when different records say different things, and that
    is shown rather than resolved.
@@ -82,9 +102,12 @@ falls back.
 - a `codex_version` that is not `codex-cli` followed by a version;
 - a time in the future, an outcome before its detection, or a count below zero;
 - `confirmed` plus `missed` larger than the number of records;
+- a capability named in `capabilities` or `local_checks.covers` that is not one of the ten above;
 - more than 500 records, or a file over 1 MB;
-- a pull request that touches anything outside the sender's own folder, or changes a file already
-  there rather than adding one. Reports are add-only.
+- a pull request that adds anything but `docs/evidence/community/<github login>/codex-cli-<version>.json`,
+  named for the report's own `codex_version`, by the login in `reporter.github_login`;
+- a second report for the same login and the same Codex version, or a change to a file already
+  there. Reports are add-only: one per GitHub login per Codex version.
 
 ## Why it is not trusted further
 
