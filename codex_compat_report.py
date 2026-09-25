@@ -51,7 +51,7 @@ import sys
 import tempfile
 import time
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 REPO = "songyb111-gachon/codex-auto-resume-windows"
 HOST = "github.com"                             # every GitHub call names it; GH_HOST never redirects one
@@ -100,6 +100,17 @@ LOCAL_PASS_REASONS = frozenset({"local_checks_passed", "registry_verified", "reg
 
 LOGIN = re.compile(r"\A[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}\Z")
 VERSION = re.compile(r"\Acodex-cli \d[0-9A-Za-z.\-]{0,39}\Z")
+# The grammar the product names engines by. The project reads 0.1.0, 00.1.0 and 0.01.0 as one engine,
+# and so accepts only the one spelling the product writes back: no leading zero, no alpha .0.
+GRAMMAR = re.compile(r"\Acodex-cli (\d{1,6})\.(\d{1,6})\.(\d{1,6})(?:-alpha\.(\d{1,9})(?:\.(\d{1,9}))?)?\Z")
+# Names Windows keeps for devices: no checkout of the project could hold a folder called that, so
+# the project refuses a report filed under one, and so does this tool, before anything is sent.
+RESERVED = frozenset({"con", "prn", "aux", "nul"} | {"com%d" % n for n in range(10)}
+                     | {"lpt%d" % n for n in range(10)})
+# What submit says once the pull request is open: what happens next, which needs nothing from you.
+AFTER_SUBMIT = ("next: the project's check reads it within minutes and its filer files it by itself; the pull "
+                "request is then closed with one comment saying where the report went, or why it waits. "
+                "Nothing more is needed from you.")
 WORD = re.compile(r"\A[A-Za-z0-9_.\-]{1,40}\Z")
 TIME = "%Y-%m-%dT%H:%M:%SZ"
 
@@ -225,11 +236,19 @@ def full(version: str) -> str:
 
 
 def canonical_version(value: str) -> str:
-    """`codex-cli <version>` as the project accepts it, and safe as a file and branch name."""
+    """`codex-cli <version>` as the project accepts it: the product's grammar, in the one spelling the
+    product writes, which is also safe as a file and branch name."""
     version = full(str(value))
-    if (not VERSION.match(version) or ".." in version or version.endswith(".")
-            or version.endswith(".lock")):
+    found = GRAMMAR.match(version)
+    if not found or not VERSION.match(version):
         raise Refused("%r is not a Codex version: give it as 0.155.0 or codex-cli 0.155.0." % value)
+    major, minor, patch, alpha, sub = found.groups()
+    written = "codex-cli %d.%d.%d" % (int(major), int(minor), int(patch))
+    if alpha is not None:
+        written += "-alpha.%d" % int(alpha) + (".%d" % int(sub) if sub is not None and int(sub) else "")
+    if written != version:
+        raise Refused("%r is not written the way the product writes it: give it as %s."
+                      % (value, written[len("codex-cli "):]))
     return version
 
 
@@ -586,7 +605,8 @@ def validate(raw: bytes):
         try:
             canonical_version(report["codex_version"])
         except Refused:
-            problems.append("codex_version cannot name a file and a branch")
+            problems.append("codex_version is not a Codex version as the product writes it (no leading zero, "
+                            "no alpha .0)")
     if not isinstance(report["verdict"], str) or report["verdict"] not in ("PASS", "CHECKED", "NONE"):
         problems.append("verdict is not PASS, CHECKED or NONE")
     written = _when(report["recorded_at"], "recorded_at", problems, allow_none=False)
@@ -600,6 +620,8 @@ def validate(raw: bytes):
     login = sender.get("github_login")
     if not isinstance(login, str) or not LOGIN.match(login):
         problems.append("reporter.github_login is not a GitHub login")
+    elif login.casefold() in RESERVED:
+        problems.append("reporter.github_login is a name Windows keeps for a device, which no folder can have")
     if sender.get("tool") != "codex-compat-reporter":
         problems.append("reporter.tool is not codex-compat-reporter")
     for field in ("tool_version", "product_version", "windows"):
@@ -685,6 +707,9 @@ def time_span(report: dict) -> str:
 def check_login(login: str) -> str:
     if not login or not LOGIN.match(login):
         raise Refused("Give the GitHub login the report will be filed under: --login <your login>.")
+    if login.casefold() in RESERVED:
+        raise Refused("A report cannot be filed under %s: Windows keeps that name for a device, so no checkout "
+                      "of the project could hold its folder. Open an issue on the project instead." % login)
     return login
 
 
@@ -949,15 +974,17 @@ def cmd_submit(arguments) -> int:
     if not _not_found(filed):
         github.must(filed, "a look for an earlier report")
     listed = github.must(github.run("pr", "list", "--repo", "%s/%s" % (HOST, REPO), "--state", "open",
-                                    "--head", branch, "--author", login, "--json", "url"),
+                                    "--author", login, "--json", "url,headRefName"),
                          "the list of open pull requests")
     try:
-        open_ones = [entry.get("url") for entry in json.loads(listed or "[]") if isinstance(entry, dict)]
+        open_ones = [entry.get("url") for entry in json.loads(listed or "[]") if isinstance(entry, dict)
+                     and str(entry.get("headRefName") or "").startswith("compat-report/")]
     except ValueError:
         raise Refused("gh answered the list of open pull requests with something that is not JSON.")
     if open_ones:
-        raise Refused("A pull request for this report is already open: %s. One report per GitHub login "
-                      "per Codex version." % ", ".join(open_ones))
+        raise Refused("A report pull request of yours is already open: %s. The project files one report per "
+                      "account at a time, and one per GitHub login per Codex version; send this one once that "
+                      "one is closed." % ", ".join(open_ones))
 
     looked = github.api("GET", "repos/" + fork)
     has_fork = not _not_found(looked)
@@ -1004,6 +1031,7 @@ def cmd_submit(arguments) -> int:
                       "keeps the fork, resets the branch to the project's main and adds the file again."
                       % (refused, "; ".join(written))) from None
     print("opened:", url)
+    print(AFTER_SUBMIT)
     return EXIT_OK
 
 

@@ -49,10 +49,12 @@ os.environ["CODEX_HOME"] = str(_SANDBOX / "codex")
 
 import codex_compat_report as reporter  # noqa: E402
 
-# The two sibling repositories, when this checkout sits beside them (the maintainer's machine).
-# The tests that read them are skipped elsewhere, the public CI included.
-ADMIN = HERE.parent.parent / "codex-compat-admin" / "compat_admin.py"
-PRODUCT_APP = (HERE.parent.parent / "codex-auto-resume" / "src" / "codex_auto_resume" / "runtime" / "app.py")
+# The product's own checkout, when this one sits beside it (the maintainer's machine, or CAR_CHECKOUT).
+# The tests that read it are skipped elsewhere, the public CI included.
+PRODUCT = pathlib.Path(os.environ.get("CAR_CHECKOUT") or HERE.parent.parent / "codex-auto-resume")
+PRODUCT_APP = PRODUCT / "src" / "codex_auto_resume" / "runtime" / "app.py"
+# The receiving side's one reader of a report, which judges a pull request and files what passes.
+PRODUCT_READER = PRODUCT / "build" / "community_report.py"
 
 NOW = float(int(time.time()) - 10 * 86400)
 VERSION = "codex-cli 0.155.0-alpha.9.2"
@@ -169,8 +171,8 @@ def run_main(*argv):
     return code, out.getvalue(), err.getvalue()
 
 
-def load_admin():
-    spec = importlib.util.spec_from_file_location("compat_admin_for_tests", ADMIN)
+def load_product_reader():
+    spec = importlib.util.spec_from_file_location("community_report_for_tests", PRODUCT_READER)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -199,8 +201,16 @@ class ReportTests(unittest.TestCase):
             with self.subTest(bad):
                 with self.assertRaises(reporter.Refused):
                     reporter.check_login(bad)
-        for good in ("a", "songyb111-gachon", "A-1"):
+        for good in ("a", "songyb111-gachon", "A-1", "com10", "nul0"):
             self.assertEqual(reporter.check_login(good), good)
+
+    def test_a_login_windows_keeps_for_a_device_is_refused_before_anything_is_written(self):
+        """The project could not hold its folder: git for Windows refuses docs/evidence/community/nul/."""
+        for reserved in ("nul", "NUL", "Con", "aux", "prn", "com1", "LPT9"):
+            with self.subTest(reserved):
+                with self.assertRaises(reporter.Refused) as refused:
+                    reporter.check_login(reserved)
+                self.assertIn("Windows keeps that name for a device", str(refused.exception))
 
     def test_records_hidden_with_clear_history_are_left_out(self):
         hidden = record(detected_at=NOW - 3000, resumed_at=NOW - 2900, outcome_at=NOW - 2800,
@@ -219,6 +229,18 @@ class ReportTests(unittest.TestCase):
                         reporter.build("a", bad)
         self.assertEqual(reporter.canonical_version("0.155.0"), "codex-cli 0.155.0")
         self.assertEqual(reporter.canonical_version("codex-cli 0.155.0"), "codex-cli 0.155.0")
+
+    def test_a_version_has_the_one_spelling_the_product_writes(self):
+        for spelling, written in (("00.155.0", "0.155.0"), ("0.0155.0", "0.155.0"),
+                                  ("0.155.0-alpha.09.2", "0.155.0-alpha.9.2"), ("0.155.0-alpha.9.0", "0.155.0-alpha.9")):
+            with self.subTest(spelling):
+                with self.assertRaises(reporter.Refused) as refused:
+                    reporter.canonical_version(spelling)
+                self.assertIn("give it as %s." % written, str(refused.exception))
+        for outside in ("0.155.0-beta.1", "0.155", "1.2.3.4"):
+            with self.subTest(outside), self.assertRaises(reporter.Refused):
+                reporter.canonical_version(outside)
+        self.assertEqual(reporter.canonical_version("0.155.0-alpha.0"), "codex-cli 0.155.0-alpha.0")
 
     def test_more_records_than_a_report_may_hold_are_refused_before_anything_is_written(self):
         rows = [record(detected_at=NOW - 5000 + n, resumed_at=NOW - 4000 + n, outcome_at=NOW - 3000 + n)
@@ -446,12 +468,12 @@ class CapabilityTests(unittest.TestCase):
         self.assertNotIn("queue_withdraw", report["local_checks"]["covers"])
         self.assertEqual(reporter.validate(reporter.encode(report))[1], [])
 
-    @unittest.skipUnless(ADMIN.is_file(), "the maintainer's tool is not beside this checkout")
+    @unittest.skipUnless(PRODUCT_READER.is_file(), "the product's checkout is not beside this one")
     def test_the_receiving_side_accepts_what_the_sixteen_become(self):
         every = {name: {"state": "COMPATIBLE", "reason": "local_checks_passed"} for name in SIXTEEN}
         with Installation([record()], capabilities=every):
             raw = reporter.encode(reporter.build(LOGIN))
-        _report, problems, _disagreements = load_admin().inspect(raw, author=LOGIN)
+        _report, problems, _recomputed = load_product_reader().inspect(raw, author=LOGIN, releases=None)
         self.assertEqual(problems, [])
 
     def test_a_registry_backed_pass_is_a_local_pass_too(self):
@@ -584,6 +606,8 @@ class ValidateTests(unittest.TestCase):
         "a time that is not one": lambda r: r["records"][0].update(detected_at="yesterday"),
         "an outcome before its detection": lambda r: r["records"][0].update(outcome_at="2000-01-01T00:00:00Z"),
         "a login that is not one": lambda r: r["reporter"].update(github_login="not a login"),
+        "a login Windows keeps for a device": lambda r: r["reporter"].update(github_login="nul"),
+        "a version in another spelling": lambda r: r.update(codex_version="codex-cli 0.155.0-alpha.09.2"),
         "a free-text product version": lambda r: r["reporter"].update(product_version="0.6.9 on my laptop"),
         "a window set by hand": lambda r: r["attribution"].update(window=["a", "b"]),
         "more records than there are": lambda r: r["capabilities"]["engine_present"].update(confirmed=5),
@@ -606,15 +630,19 @@ class ValidateTests(unittest.TestCase):
         self.assertEqual(reporter.validate(b" " * (reporter.MAX_BYTES + 1))[1], ["the file is larger than 1 MB"])
         self.assertEqual(reporter.validate(json.dumps({"edited": True}).encode())[1][0][:5], "keys:")
 
-    @unittest.skipUnless(ADMIN.is_file(), "the maintainer's tool is not beside this checkout")
+    @unittest.skipUnless(PRODUCT_READER.is_file(), "the product's checkout is not beside this one")
     def test_the_receiving_side_agrees_rule_for_rule(self):
-        admin = load_admin()
+        """The project's own reader, which judges the pull request and files what passes (before
+        v1.2.0 this compared with the maintainer's tool, whose copy of it is gone)."""
+        reader = load_product_reader()
+        if not hasattr(reader, "canonical_version"):
+            self.skipTest("the product checkout beside this one predates the rule on a version's spelling")
         for name, mutate in [("unchanged", lambda r: None)] + list(self.MUTATIONS.items()):
             with self.subTest(name):
                 report = self.good()
                 mutate(report)
                 raw = reporter.encode(report)
-                self.assertEqual(bool(reporter.validate(raw)[1]), bool(admin.inspect(raw)[1]))
+                self.assertEqual(bool(reporter.validate(raw)[1]), bool(reader.inspect(raw, releases=None)[1]))
 
 
 # ------------------------------------------------------------------------------------ submit
@@ -632,7 +660,10 @@ class FakeGh:
     def __init__(self, exe, *, signed_in=True, login=LOGIN, door=True, filed=False, open_prs=(),
                  fork=False, branch=False, copying=0, answers=None):
         self.exe, self.signed_in, self.login = exe, signed_in, login
-        self.door, self.filed, self.open_prs, self.fork, self.branch = door, filed, list(open_prs), fork, branch
+        self.door, self.filed, self.fork, self.branch = door, filed, fork, branch
+        # (url, head branch) for each open pull request of this login; a bare url is a report's.
+        self.open_prs = [(pr, "compat-report/codex-cli-0.155.0") if isinstance(pr, str) else tuple(pr)
+                         for pr in open_prs]
         self.copying = copying          # how many looks at a new fork's main find it not yet copied
         self.answers = dict(answers or {})
         self.calls, self.environments, self.uploads = [], [], []
@@ -670,7 +701,7 @@ class FakeGh:
             ("GET", "user"): (0, self.login, ""),
             ("GET", "repos/%s/contents/%s" % (REPO, reporter.COMMUNITY)): (0, "[]", "") if self.door else self.NOT_FOUND,
             ("GET", "repos/%s/contents/%s" % (REPO, path)): (0, "{}", "") if self.filed else self.NOT_FOUND,
-            ("pr list",): (0, json.dumps([{"url": url} for url in self.open_prs]), ""),
+            ("pr list",): (0, json.dumps([{"url": url, "headRefName": head} for url, head in self.open_prs]), ""),
             ("GET", "repos/" + FORK): (0, json.dumps({"full_name": FORK, "fork": True,
                                                       "parent": {"full_name": REPO}}), "") if self.fork else self.NOT_FOUND,
             ("GET", "repos/%s/git/ref/heads/%s" % (FORK, branch)): (0, "{}", "") if self.branch else self.NOT_FOUND,
@@ -764,13 +795,15 @@ class SubmitTests(unittest.TestCase):
         self.assertIn("sha=" + SHA, refs)
         listing = gh.calls[4]
         self.assertEqual(listing[listing.index("--repo") + 1], "github.com/" + REPO)
-        self.assertEqual(listing[listing.index("--head") + 1], branch)
+        self.assertNotIn("--head", listing, "any open report of this login counts, not only this one")
+        self.assertEqual(listing[listing.index("--json") + 1], "url,headRefName")
         self.assertEqual(listing[listing.index("--author") + 1], LOGIN)
         opened = gh.calls[-1]
         self.assertEqual(opened[opened.index("--repo") + 1], "github.com/" + REPO)
         self.assertEqual(opened[opened.index("--base") + 1], "main")
         self.assertEqual(opened[opened.index("--head") + 1], "%s:%s" % (LOGIN, branch))
         self.assertIn("opened: https://github.com/%s/pull/7" % REPO, out)
+        self.assertEqual(out.rstrip().splitlines()[-1], reporter.AFTER_SUBMIT)
         for environment in gh.environments:
             self.assertEqual(environment.get("NoDefaultCurrentDirectoryInExePath"), "1")
             self.assertNotIn("GH_HOST", environment)
@@ -853,6 +886,17 @@ class SubmitTests(unittest.TestCase):
                 self.assertEqual(code, 2)
                 self.assertIn(said, err)
                 self.assertEqual(gh.writes(), [])
+
+    def test_one_report_at_a_time_whatever_its_version_and_other_pull_requests_do_not_count(self):
+        """The project files one open report per account; a second is closed there, so it is not sent."""
+        other = ("https://github.com/%s/pull/4" % REPO, "compat-report/codex-cli-0.153.4")
+        gh, code, _out, err = self.submit(str(self.file), "--yes", open_prs=[other])
+        self.assertEqual(code, 2)
+        self.assertIn("one report per account at a time", err)
+        self.assertEqual(gh.writes(), [])
+        code_change = ("https://github.com/%s/pull/5" % REPO, "fix-a-typo")
+        gh, code, _out, err = self.submit(str(self.file), "--yes", open_prs=[code_change])
+        self.assertEqual(code, 0, err)
 
     def test_a_left_over_branch_is_reset_to_main_rather_than_reused(self):
         gh, code, out, err = self.submit(str(self.file), "--yes", fork=True, branch=True)

@@ -74,6 +74,11 @@ falls back.
 
 ## What the project does with it
 
+A report that passes the project's check is filed by the project's own code, with no one's step:
+judged again against its main, kept as the project's regeneration of it, and the pull request closed
+with one comment saying where it went - or why it waits, with the date it is looked at again, or
+what to do about a refusal. Filing does, in order:
+
 1. **Recomputes.** Every derived field - `verdict`, each `level`, the consistency of each count
    against the records - is worked out again from the records in the file. A level edited by hand
    does not survive; it is reported back as a disagreement.
@@ -81,7 +86,7 @@ falls back.
    receiving side from its own strings. No sentence from a report is ever displayed as written.
 3. **Counts it as Reported, and as nothing else.** It lands in
    `docs/evidence/community/<github login>/`, never in the product's compatibility data, and never
-   changes a version's tier. What it contributes is one machine's entry in the **Reported** grade
+   changes a version's tier. What it contributes is one report's entry in the **Reported** grade
    beside the version - a grade of its own, beside the ladder *verified*, *checked*, *compatible*,
    *failed here*, and never on it. A version whose own evidence says nothing stays *compatible*
    however many reports arrive. A report is:
@@ -99,7 +104,11 @@ falls back.
 ## What gets a report refused
 
 - the format string, a key or a value outside what this page lists;
-- a `codex_version` that is not `codex-cli` followed by a version;
+- a `codex_version` that is not `codex-cli` followed by a version in the grammar the product names
+  engines by (`MAJOR.MINOR.PATCH`, optionally `-alpha.N` or `-alpha.N.M`), written the one way the
+  product writes it: no leading zero, and no `.0` after an alpha's number;
+- a `reporter.github_login` that is a name Windows keeps for a device (`con`, `prn`, `aux`, `nul`,
+  `com0` to `com9`, `lpt0` to `lpt9`, in any letter case): no Windows checkout could hold its folder;
 - a time in the future, an outcome before its detection, or a count below zero;
 - `confirmed` plus `missed` larger than the number of records;
 - a capability named in `capabilities` or `local_checks.covers` that is not one of the ten above;
