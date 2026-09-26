@@ -2,12 +2,22 @@
 
     python codex_compat_report.py guide
     python codex_compat_report.py status
-    python codex_compat_report.py report --login <your GitHub login> [--codex-version V] [--out FILE] [--force]
-    python codex_compat_report.py submit [FILE] [--login L] [--sha256 HEX] [--dry-run | --yes]
+    python codex_compat_report.py report --login <your GitHub login> [--codex-version V] [--out FILE] [--force] [--json]
+    python codex_compat_report.py submit [FILE] [--login L] [--sha256 HEX] [--dry-run | --yes] [--json]
+    python codex_compat_report.py survey [--json]
+    python codex_compat_report.py web-steps FILE [--login L] [--json]
 
 (`py` works in place of `python` where the Python launcher is installed.) `guide` is what Report.cmd
 runs when it is double-clicked: the other three, one question at a time, and nothing sent unless the
 person types `send`.
+
+--json is the machine interface a window speaks to this file through: the command prints exactly one
+JSON object on stdout and nothing else - {"ok": true, ...} with what the command found or did, or
+{"ok": false, "refused": <the sentence the console prints>, "exit": <its exit code>}, which after a
+send that had begun also carries "written", the list the console prints. Exit codes are unchanged.
+`survey` (always JSON) is what `status` and the guide's first two steps show; `web-steps` is how the
+guide says to send a report on the web. The words and the JSON come from the same functions, so the
+two cannot say different things.
 
 What it reads, on this machine only and read-only: the product's own installation - its plugin
 manifest, its log and the five rotated copies of it, its state database and the compatibility
@@ -41,6 +51,7 @@ import collections
 import contextlib
 import datetime as dt
 import hashlib
+import io
 import json
 import math
 import os
@@ -53,6 +64,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import traceback
 
 __version__ = "1.3.1"
 
@@ -114,6 +126,9 @@ RESERVED = frozenset({"con", "prn", "aux", "nul"} | {"com%d" % n for n in range(
 AFTER_SUBMIT = ("next: the project's check reads it within minutes and its filer files it by itself; the pull "
                 "request is then closed with one comment saying where the report went, or why it waits. "
                 "Nothing more is needed from you.")
+# What submit says when the project's folder for reports is not there yet, and it exits with 3.
+NOT_OPEN = ("The project is not taking reports yet: %s does not exist on %s's main." % (COMMUNITY, REPO),
+            "Nothing was sent. Keep the file, and send it when that folder appears.")
 WORD = re.compile(r"\A[A-Za-z0-9_.\-]{1,40}\Z")
 TIME = "%Y-%m-%dT%H:%M:%SZ"
 
@@ -170,6 +185,12 @@ class Refused(Exception):
     """Something this tool will not guess at. The message says what to do."""
     exit_code = EXIT_REFUSED
     written = ()                # what submit --yes had already written to GitHub when it was refused
+
+
+class NotOpen(Refused):
+    """--json only: the project is not taking reports yet, and nothing was sent (the console says the same
+    in two lines on its output, NOT_OPEN, and exits with 3)."""
+    exit_code = EXIT_NOT_OPEN
 
 
 # --------------------------------------------------------------------- what one recovery shows
@@ -416,6 +437,12 @@ def state_rows():
     return [row for row in rows if _moment(row["detected_at"])], hidden
 
 
+def no_state() -> Refused:
+    """What `report` and the guide say on a machine whose watcher has not written its records yet."""
+    return Refused("This machine has no recovery state yet (%s): let the watcher run first."
+                   % (PRODUCT / "config" / "state.sqlite"))
+
+
 def newest_history():
     """Codex names its history database with a schema generation - thread_history_9, _10.
 
@@ -459,8 +486,7 @@ def build(login: str, version: str | None = None, notes: dict | None = None) -> 
     version = canonical_version(version) if version else current
     found = state_rows()
     if found is None:
-        raise Refused("This machine has no recovery state yet (%s): let the watcher run first."
-                      % (PRODUCT / "config" / "state.sqlite"))
+        raise no_state()
     every, hidden = found
     timeline = engine_timeline(lines)
 
@@ -733,27 +759,38 @@ def _unplaced_text(notes: dict) -> str:
                         ", ".join("%d: %s" % (many, why) for why, many in sorted(unplaced.items())))
 
 
-def status_lines() -> list:
-    """What this machine can show, a line each, as `status` prints it and the guide's first step."""
+def machine() -> dict:
+    """What this machine can show, as fields and as the lines `status` prints: the one source of `status`,
+    of the guide's first step and of `survey`. It reads only, and refuses only when the product is not
+    installed. `blocked` is the sentence the guide stops with when no report can be written here yet,
+    or None."""
     product = installed_product()
     lines = log_lines()
     engine = _dict(watcher_report().get("engine")).get("version")
+    blocked = None
     try:
         current = installed_codex(lines)
-    except Refused:
-        current = None
+    except Refused as refused:
+        current, blocked = None, str(refused)
     said = ["installation   : %s" % PRODUCT,
             "product version: %s" % product,
             "engine version : %s" % (current or "not reported yet")
             + ("" if current is None or engine else " (from the log; the watcher has not written its report)")]
+    # found: "yes", "none" (no state database yet) or "unreadable" (problem says why).
+    records = {"found": "yes", "total": None, "on_this_version": None, "other_versions": None,
+               "not_placed": None, "not_placed_why": {}, "problem": None}
+    hidden = None
     try:
         found = state_rows()
     except Refused as refused:
         found = None
-        said.append("records here   : cannot be read - %s" % refused)
+        records.update(found="unreadable", problem=str(refused), text="records here   : cannot be read - %s" % refused)
+        blocked = blocked or str(refused)
     else:
         if found is None:
-            said.append("records here   : none yet (no state database at %s)" % (PRODUCT / "config" / "state.sqlite"))
+            records.update(found="none", text="records here   : none yet (no state database at %s)"
+                                              % (PRODUCT / "config" / "state.sqlite"))
+            blocked = blocked or str(no_state())
     if found is not None:
         rows, hidden = found
         timeline = engine_timeline(lines)
@@ -766,21 +803,45 @@ def status_lines() -> list:
                 elsewhere += 1
             else:
                 unplaced[why] += 1
-        said.append("records here   : %d in all: %d on this engine version, %d on other versions, %s not placed"
-                    % (len(rows), on, elsewhere, _unplaced_text({"unplaced": unplaced})))
+        records.update(total=len(rows), on_this_version=on, other_versions=elsewhere,
+                       not_placed=sum(unplaced.values()), not_placed_why=dict(sorted(unplaced.items())),
+                       text="records here   : %d in all: %d on this engine version, %d on other versions, %s not "
+                            "placed" % (len(rows), on, elsewhere, _unplaced_text({"unplaced": unplaced})))
+    said.append(records["text"])
+    if hidden is not None:
         said.append("hidden         : %d hidden with Clear history, which a report leaves out" % hidden)
     seen = sum(1 for _when, text in lines if current and passes_checks(text, current))
-    said.append("local checks   : %s" % ("passed on this version (%d log line%s)" % (seen, "s"[:seen != 1])
-                                         if seen else "not seen in the logs kept"))
-    return said
+    checks = "local checks   : %s" % ("passed on this version (%d log line%s)" % (seen, "s"[:seen != 1])
+                                      if seen else "not seen in the logs kept")
+    said.append(checks)
+    try:
+        report_file = default_path(current) if current else None
+    except Refused:                                  # a version the product would not write: `report` says so
+        report_file = None
+    return {"tool_version": __version__, "installation": str(PRODUCT), "product_version": product,
+            "engine_version": current, "engine_from_log": bool(current and not engine),
+            "records": records, "hidden": hidden, "local_checks": {"lines": seen, "text": checks},
+            "report_file": None if report_file is None else {"path": str(report_file),
+                                                             "exists": report_file.exists()},
+            "blocked": blocked, "lines": said}
 
 
 def cmd_status(_arguments) -> int:
-    for line in status_lines():
+    for line in machine()["lines"]:
         print(line)
     print()
     print("Write the report with:  python codex_compat_report.py report --login <your GitHub login>")
     return EXIT_OK
+
+
+def survey() -> dict:
+    """`survey`: what the guide's first two steps show - this machine, and whether gh is here, signed in,
+    and as whom, which is the login the guide offers. Nothing is written; gh is asked only read-only
+    questions (signed_in)."""
+    found = machine()
+    github, who = signed_in()
+    found.update(gh=gh_facts(github, who), default_login=who)
+    return found
 
 
 def write_new(target: pathlib.Path, raw: bytes, force: bool) -> None:
@@ -809,26 +870,45 @@ def make_report(login: str, version: str | None = None):
     return report, raw, notes
 
 
-def summary(report: dict, raw: bytes, notes: dict | None = None) -> list:
-    """The few lines that say what a report holds. `notes` is what building it left out, when known."""
+def facts(report: dict, raw: bytes, notes: dict | None = None) -> dict:
+    """What a report holds, as fields and as the few lines `report` and the guide print under it: the one
+    source of both and of `report --json`. `notes` is what building it left out, when known."""
+    digest = hashlib.sha256(raw).hexdigest()
+    period = time_span(report)
     said = ["version    : %s" % report["codex_version"],
             "verdict    : %s" % report["verdict"],
-            "records    : %d, %s" % (len(report["records"]), time_span(report))]
+            "records    : %d, %s" % (len(report["records"]), period)]
+    left_out = None
     if notes is not None:
-        said.append("left out   : %d hidden with Clear history; %d on other engine versions; %s not placed"
-                    % (notes["hidden"], notes["elsewhere"], _unplaced_text(notes)))
-    return said + ["SHA-256    : %s" % hashlib.sha256(raw).hexdigest()]
+        unplaced = dict(sorted((notes.get("unplaced") or {}).items()))
+        left_out = {"hidden": notes["hidden"], "other_versions": notes["elsewhere"],
+                    "not_placed": sum(unplaced.values()), "not_placed_why": unplaced,
+                    "text": "%d hidden with Clear history; %d on other engine versions; %s not placed"
+                            % (notes["hidden"], notes["elsewhere"], _unplaced_text(notes))}
+        said.append("left out   : %s" % left_out["text"])
+    said.append("SHA-256    : %s" % digest)
+    return {"codex_version": report["codex_version"], "verdict": report["verdict"],
+            "login": _dict(report.get("reporter")).get("github_login"), "records": len(report["records"]),
+            "span": period, "bytes": len(raw), "sha256": digest, "left_out": left_out, "lines": said}
+
+
+def write_report(login: str, version: str | None = None, out=None, force: bool = False) -> dict:
+    """`report`: the report built, held to the project's rules and written, and what it holds (facts),
+    with the path it was written to."""
+    report, raw, notes = make_report(login, version)
+    target = pathlib.Path(out) if out else default_path(report["codex_version"])
+    write_new(target, raw, force)
+    return dict(facts(report, raw, notes), path=str(target))
 
 
 def cmd_report(arguments) -> int:
-    report, raw, notes = make_report(arguments.login, arguments.version)
-    target = pathlib.Path(arguments.out) if arguments.out else default_path(report["codex_version"])
-    write_new(target, raw, arguments.force)
-    print("wrote %s" % target)
-    for line in summary(report, raw, notes):
+    written = write_report(arguments.login, arguments.version, arguments.out, arguments.force)
+    print("wrote %s" % written["path"])
+    for line in written["lines"]:
         print("  " + line)
     print()
-    print("Read it - it is yours to send or not. Then:  python codex_compat_report.py submit \"%s\"" % target)
+    print("Read it - it is yours to send or not. Then:  python codex_compat_report.py submit \"%s\""
+          % written["path"])
     return EXIT_OK
 
 
@@ -974,6 +1054,15 @@ def read_report(path) -> bytes:
         raise Refused("%s could not be read: %s. Write the report with `report` first." % (path, error))
 
 
+def filed_under(report: dict, login=None) -> str:
+    """The login a report that passed validate() is filed under; refused when `login` is given and it is
+    another (submit --login, web-steps --login)."""
+    filed_as = report["reporter"]["github_login"]
+    if login and login != filed_as:
+        raise Refused("The file is filed under %s, not %s." % (filed_as, login))
+    return filed_as
+
+
 class Ready:
     """What submit found before its first write: the bytes, where they go, and what sending writes."""
 
@@ -998,10 +1087,7 @@ def prepare_submit(path, *, login=None, sha256=None, say=print):
     if problems:
         raise Refused("%s is not a report the project would accept, so nothing was sent:\n  - %s"
                       % (path, "\n  - ".join(problems)))
-    filed_as = report["reporter"]["github_login"]
-    if login and login != filed_as:
-        raise Refused("The file is filed under %s, not %s." % (filed_as, login))
-    login = filed_as
+    login = filed_under(report, login)
     if login.casefold() == REPO.split("/")[0].casefold():
         # GitHub cannot fork a repository into the account that owns it, and the owner's machine is
         # not a community report: its evidence goes into the compatibility data itself.
@@ -1040,8 +1126,8 @@ def prepare_submit(path, *, login=None, sha256=None, say=print):
     door = github.api("GET", "repos/%s/contents/%s" % (REPO, COMMUNITY))
     if _not_found(door):
         say("")
-        say("The project is not taking reports yet: %s does not exist on %s's main." % (COMMUNITY, REPO))
-        say("Nothing was sent. Keep the file, and send it when that folder appears.")
+        for line in NOT_OPEN:
+            say(line)
         return None
     github.must(door, "a look at %s" % COMMUNITY)
     filed = github.api("GET", "repos/%s/contents/%s" % (REPO, target))
@@ -1091,13 +1177,15 @@ def prepare_submit(path, *, login=None, sha256=None, say=print):
                        "a look at the project's main")
     if not re.fullmatch(r"[0-9a-f]{40}", base):
         raise Refused("GitHub did not give the project's main as a commit: %r" % base[:80])
-    return Ready(raw=raw, report=report, login=login, fork=fork, branch=branch, target=target, base=base,
-                 has_fork=has_fork, has_branch=has_branch, github=github)
+    return Ready(path=path, raw=raw, digest=digest, report=report, login=login, fork=fork, branch=branch,
+                 target=target, base=base, has_fork=has_fork, has_branch=has_branch, github=github,
+                 url=None, written=[])
 
 
-def send(ready: Ready, say=print) -> int:
-    """The writes of submit --yes, and what it says once the pull request is open."""
-    written = []                                        # what is on GitHub now that was not before
+def send(ready: Ready, say=print) -> str:
+    """The writes of submit --yes, and what it says once the pull request is open: its address, which is
+    also kept as ready.url, with what was written in ready.written."""
+    written = ready.written = []                        # what is on GitHub now that was not before
     try:
         url = _write(ready.github, ready.report, ready.raw, ready.login, ready.fork, ready.branch, ready.target,
                      ready.base, ready.has_fork, ready.has_branch, written)
@@ -1109,26 +1197,36 @@ def send(ready: Ready, say=print) -> int:
                          % (refused, "; ".join(written)))
         partly.written = written
         raise partly from None
+    ready.url = url
     say("opened: %s" % url)
     say(AFTER_SUBMIT)
-    return EXIT_OK
+    return url
+
+
+def submission(path, *, login=None, sha256=None, dry_run=False, yes=False, say=print):
+    """`submit`, said through `say`: the one source of its words and of `submit --json`. The Ready it went
+    on with - sent when `yes` - or None when the project is not taking reports yet (exit code 3)."""
+    ready = prepare_submit(path, login=login, sha256=sha256, say=say)
+    if ready is None:
+        return None
+    say("")
+    say("With --yes this writes to GitHub, as %s:" % ready.login)
+    for write in ready.writes():
+        say("  - %s" % write)
+    if dry_run:
+        say("")
+        say("--dry-run: nothing was written. The calls above only read from GitHub.")
+        return ready
+    if not yes:
+        raise Refused("Nothing was sent. Add --yes when you have read the file and want it public.")
+    send(ready, say=say)
+    return ready
 
 
 def cmd_submit(arguments) -> int:
-    ready = prepare_submit(pick_file(arguments.file), login=arguments.login, sha256=arguments.sha256)
-    if ready is None:
-        return EXIT_NOT_OPEN
-    print()
-    print("With --yes this writes to GitHub, as %s:" % ready.login)
-    for write in ready.writes():
-        print("  - %s" % write)
-    if arguments.dry_run:
-        print()
-        print("--dry-run: nothing was written. The calls above only read from GitHub.")
-        return EXIT_OK
-    if not arguments.yes:
-        raise Refused("Nothing was sent. Add --yes when you have read the file and want it public.")
-    return send(ready)
+    ready = submission(pick_file(arguments.file), login=arguments.login, sha256=arguments.sha256,
+                       dry_run=arguments.dry_run, yes=arguments.yes)
+    return EXIT_NOT_OPEN if ready is None else EXIT_OK
 
 
 # ------------------------------------------------------------------------------------ the guide
@@ -1196,6 +1294,82 @@ def signed_in():
     return github, (out if code == 0 and LOGIN.match(out) else None)
 
 
+def gh_facts(github, who) -> dict:
+    """What signed_in() found, as `survey` and `web-steps` give it: gh's path when it is here and starts,
+    and the login it is signed in to github.com as, when it is."""
+    return {"path": github.exe if github else None, "signed_in": who is not None, "login": who}
+
+
+def judged(path, raw: bytes):
+    """(report, SHA-256) of a file as it is now, once the person has read it; refused when the project
+    would not take it. The guide's reading step and `web-steps` both hold the file to this."""
+    report, problems = validate(raw)
+    if problems:
+        raise Refused("%s is not a report the project would accept, so it cannot be sent:\n  - %s"
+                      % (path, "\n  - ".join(problems)))
+    return report, hashlib.sha256(raw).hexdigest()
+
+
+def spelled_as_github(path, login, who):
+    """Refused when gh is signed in as the login's own account written in another letter case (signed in
+    only after the login was asked): the report must be written again under GitHub's spelling, since a
+    send from here would be refused and the web steps would name a folder the project refuses."""
+    if github_spelling(login, who):
+        raise Refused("%s is filed under %s, but GitHub spells that login %s, and the project takes a "
+                      "report only under the login exactly as GitHub spells it. Run this again, take %s "
+                      "at the login, and write a new one over this file." % (path, login, who, who))
+
+
+def web_route(path, version: str, login: str, github, who) -> dict:
+    """How the person sends a report on the web when gh cannot send it from here: why it cannot (from what
+    signed_in() found), and the steps, each with the one value to type where it has one. The one source
+    of the guide's last step without gh and of `web-steps`; `lines` is what the guide prints, less its
+    two-space indent."""
+    if github is None:
+        why = ["gh, the GitHub CLI, is not installed here, so this cannot send the report for you."]
+    elif who is None:
+        why = ["gh, the GitHub CLI, is not signed in to github.com here, so this cannot send the report."]
+    elif who != login:
+        why = ["gh, the GitHub CLI, is signed in here as %s, not %s, so this cannot send the report." % (who, login)]
+    else:                                            # gh could send it from here: nothing stops it
+        why = []
+    if github is not None and who != login:
+        why.append("Sign it in as %s (gh auth login --hostname github.com) and run this again to send from here."
+                   % login)
+    target, branch = destination(version, login)
+    steps = [{"text": "Open %s and choose Fork" % PROJECT_PAGE, "copy": None,
+              "notes": ["(a fork you already have will do)."]},
+             {"text": "In your fork, open the branch list (it shows main), type this name and choose Create branch:",
+              "copy": branch, "notes": []},
+             {"text": "On that branch, choose Add file > Create new file, and give it this name:", "copy": target,
+              "notes": ["Paste the whole report into it (in Notepad: Ctrl+A, Ctrl+C) and commit it to that branch."]},
+             {"text": "Choose Contribute > Open pull request, to the project's main, and create it.", "copy": None,
+              "notes": ["One report pull request of yours may be open at a time; send this once any other is closed."]}]
+    said = why + ["The report stays here:", str(path), "",
+                  "To send it on the web instead, signed in to GitHub as %s:" % login]
+    for number, step in enumerate(steps, 1):
+        said.append("  %d. %s" % (number, step["text"]))
+        if step["copy"]:
+            said.append("       %s" % step["copy"])
+        said += ["     %s" % note for note in step["notes"]]
+    said.append("The project's check then reads it within minutes, just as it reads one sent from here.")
+    return {"login": login, "codex_version": version, "target": target, "branch": branch,
+            "project_page": PROJECT_PAGE, "why": why, "steps": steps, "lines": said}
+
+
+def web_steps(path, login=None) -> dict:
+    """`web-steps`: the file read once and held to the project's rules (and, given `login`, to that login),
+    and how to send it on the web under the login it is filed under, with gh asked the guide's read-only
+    questions for why it cannot send it from here (`why` is empty when it can)."""
+    raw = read_report(path)
+    report, digest = judged(path, raw)
+    login = filed_under(report, login)
+    github, who = signed_in()
+    spelled_as_github(path, login, who)
+    route = web_route(path, report["codex_version"], login, github, who)
+    return dict(route, file=str(path), bytes=len(raw), sha256=digest, gh=gh_facts(github, who))
+
+
 class Guide:
     """status, report and submit, one question at a time, in plain words.
 
@@ -1247,12 +1421,11 @@ class Guide:
         print("Nothing leaves this machine unless you type send at the end.")
 
         self.step(1, "what this machine can show")
-        for line in status_lines():
+        found = machine()
+        for line in found["lines"]:
             print("  " + line)
-        installed_codex()                                # the reason, when there is no version to report
-        if state_rows() is None:
-            raise Refused("This machine has no recovery state yet (%s): let the watcher run first."
-                          % (PRODUCT / "config" / "state.sqlite"))
+        if found["blocked"]:                             # the reason, when there is nothing to report
+            raise Refused(found["blocked"])
 
         self.step(2, "your GitHub login")
         print("  The report is filed under it, and it is public once sent.")
@@ -1284,7 +1457,7 @@ class Guide:
             write_new(target, raw, over)
             self.path = target
             print("  Written, from this machine's own records.")
-        for line in summary(report, raw, notes):
+        for line in facts(report, raw, notes)["lines"]:
             print("    " + line)
 
         self.step(4, "read it")
@@ -1298,18 +1471,11 @@ class Guide:
         reviewed = read_report(target)
         if reviewed != raw:
             print("  The file has changed since it was written. What would be sent is what it holds now.")
-        report, problems = validate(reviewed)
-        if problems:
-            raise Refused("%s is not a report the project would accept, so it cannot be sent:\n  - %s"
-                          % (target, "\n  - ".join(problems)))
-        digest = hashlib.sha256(reviewed).hexdigest()
+        report, digest = judged(target, reviewed)
 
         self.step(5, "send it, or not")
         github, who = signed_in()
-        if github_spelling(login, who):             # gh was signed in only after step 2
-            raise Refused("%s is filed under %s, but GitHub spells that login %s, and the project takes a "
-                          "report only under the login exactly as GitHub spells it. Run this again, take %s "
-                          "at the login, and write a new one over this file." % (target, login, who, who))
+        spelled_as_github(target, login, who)           # gh was signed in only after step 2
         if who != login:
             return self.on_the_web(report, login, github, who)
         indented = lambda text="": print("  " + text if text else "")   # noqa: E731
@@ -1333,7 +1499,8 @@ class Guide:
         if again.writes() != ready.writes():
             raise Refused("What sending would write to GitHub changed while you were asked, so nothing was "
                           "sent. Run the guide again to be asked about what it is now.")
-        return send(again, say=indented)
+        send(again, say=indented)
+        return EXIT_OK
 
     def login(self, offered):
         for _attempt in range(3):
@@ -1356,31 +1523,8 @@ class Guide:
 
     def on_the_web(self, report, login, github, who) -> int:
         """Without gh signed in as the login, the report is sent on the web, by the person, or not at all."""
-        if github is None:
-            print("  gh, the GitHub CLI, is not installed here, so this cannot send the report for you.")
-        elif who is None:
-            print("  gh, the GitHub CLI, is not signed in to github.com here, so this cannot send the report.")
-        else:
-            print("  gh, the GitHub CLI, is signed in here as %s, not %s, so this cannot send the report."
-                  % (who, login))
-        if github is not None:
-            print("  Sign it in as %s (gh auth login --hostname github.com) and run this again to send from here."
-                  % login)
-        path, branch = destination(report["codex_version"], login)
-        print("  The report stays here:")
-        print("  %s" % self.path)
-        print()
-        print("  To send it on the web instead, signed in to GitHub as %s:" % login)
-        print("    1. Open %s and choose Fork" % PROJECT_PAGE)
-        print("       (a fork you already have will do).")
-        print("    2. In your fork, open the branch list (it shows main), type this name and choose Create branch:")
-        print("         %s" % branch)
-        print("    3. On that branch, choose Add file > Create new file, and give it this name:")
-        print("         %s" % path)
-        print("       Paste the whole report into it (in Notepad: Ctrl+A, Ctrl+C) and commit it to that branch.")
-        print("    4. Choose Contribute > Open pull request, to the project's main, and create it.")
-        print("       One report pull request of yours may be open at a time; send this once any other is closed.")
-        print("  The project's check then reads it within minutes, just as it reads one sent from here.")
+        for line in web_route(self.path, report["codex_version"], login, github, who)["lines"]:
+            print("  " + line if line else "")
         if agree("  Open the project's page in your browser?", False):
             if not show(BROWSER, PROJECT_PAGE):
                 print("  The browser could not be started: open %s yourself." % PROJECT_PAGE)
@@ -1391,6 +1535,70 @@ def cmd_guide(_arguments) -> int:
     return Guide().run()
 
 
+def cmd_web_steps(arguments) -> int:
+    for line in web_steps(arguments.file, arguments.login)["lines"]:
+        print(line)
+    return EXIT_OK
+
+
+# ------------------------------------------------------------------------------------- --json
+# What a window hears. Each answer is built by the same functions the words are, and returns the fields
+# of {"ok": true, ...}; a refusal is raised as the console raises it, and answer() turns it into
+# {"ok": false, "refused", "exit"}.
+WINDOW = "for a window: exactly one JSON object on stdout, with what the words would say"
+
+
+def json_survey(_arguments) -> dict:
+    return survey()
+
+
+def json_report(arguments) -> dict:
+    return write_report(arguments.login, arguments.version, arguments.out, arguments.force)
+
+
+def json_submit(arguments) -> dict:
+    said = []
+    ready = submission(pick_file(arguments.file), login=arguments.login, sha256=arguments.sha256,
+                       dry_run=arguments.dry_run, yes=arguments.yes, say=said.append)
+    if ready is None:
+        raise NotOpen("\n".join(NOT_OPEN))
+    return {"file": str(ready.path), "bytes": len(ready.raw), "sha256": ready.digest,
+            "codex_version": ready.report["codex_version"], "verdict": ready.report["verdict"],
+            "records": len(ready.report["records"]), "login": ready.login, "repository": REPO,
+            "target": ready.target, "branch": ready.branch, "fork": ready.fork, "fork_exists": ready.has_fork,
+            "branch_exists": ready.has_branch, "gh": ready.github.exe, "writes": ready.writes(),
+            "url": ready.url, "written": list(ready.written), "after": AFTER_SUBMIT if ready.url else None,
+            "lines": said}
+
+
+def json_web_steps(arguments) -> dict:
+    return web_steps(arguments.file, arguments.login)
+
+
+def answer(arguments) -> int:
+    """A command run for a window: exactly one JSON object on stdout, and the exit code the console has.
+    Anything else that would reach stdout goes to stderr, so stdout is always that one object."""
+    stray = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(stray):
+            if os.name != "nt":
+                raise Refused("Codex Auto Resume is a Windows product, and so is this.")
+            result = dict({"ok": True}, **arguments.answer(arguments))
+    except Refused as refused:
+        result = {"ok": False, "refused": str(refused), "exit": refused.exit_code}
+        if refused.written:
+            result["written"] = list(refused.written)
+    except Exception as error:                      # a bug: in full on stderr, and said in the object
+        traceback.print_exc()
+        result = {"ok": False, "exit": 1,
+                  "refused": "An unexpected error - a bug; please report it: %s: %s" % (type(error).__name__, error)}
+    if stray.getvalue():
+        sys.stderr.write(stray.getvalue())
+    sys.stdout.write(json.dumps(result, ensure_ascii=True) + "\n")
+    sys.stdout.flush()
+    return EXIT_OK if result["ok"] else result["exit"]
+
+
 def _version_argument(value):
     try:
         return canonical_version(value)
@@ -1398,7 +1606,26 @@ def _version_argument(value):
         raise argparse.ArgumentTypeError(str(refused))
 
 
+def _parse(parser, argv):
+    """The arguments, for a window: a usage error is one JSON object too, and its words go to stderr."""
+    heard = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(heard), contextlib.redirect_stderr(heard):
+            return parser.parse_args(argv)
+    except SystemExit as exit_:
+        if not exit_.code:                          # --help: asked for in words
+            sys.stdout.write(heard.getvalue())
+            raise
+        sys.stderr.write(heard.getvalue())
+        said = heard.getvalue().strip()                # usage: ..., then <prog>: error: <what is wrong>
+        sys.stdout.write(json.dumps({"ok": False, "refused": said.split(": error: ", 1)[-1] or "a usage error",
+                                     "exit": exit_.code}, ensure_ascii=True) + "\n")
+        sys.stdout.flush()
+        raise
+
+
 def main(argv=None) -> int:
+    argv = sys.argv[1:] if argv is None else list(argv)
     parser = argparse.ArgumentParser(
         prog="codex_compat_report", description="Report how Codex Auto Resume behaved on your machine.",
         epilog="Exit codes: 0 done; 1 an unexpected error; 2 refused, or a usage error; 3 the project "
@@ -1417,7 +1644,8 @@ def main(argv=None) -> int:
     report.add_argument("--out", default=None, metavar="FILE",
                         help="where to write it (default: codex-cli-<version>.json in the current folder)")
     report.add_argument("--force", action="store_true", help="write over a file that is already there")
-    report.set_defaults(run=cmd_report)
+    report.add_argument("--json", action="store_true", help=WINDOW)
+    report.set_defaults(run=cmd_report, answer=json_report)
     submit = commands.add_parser("submit", help="send a report you have read, exactly as it is")
     submit.add_argument("file", nargs="?", default=None, metavar="FILE",
                         help="the report to send (default: the one codex-cli-*.json in the current folder)")
@@ -1427,8 +1655,22 @@ def main(argv=None) -> int:
     either = submit.add_mutually_exclusive_group()
     either.add_argument("--dry-run", action="store_true", help="check everything, say what it would write, and stop")
     either.add_argument("--yes", action="store_true", help="yes, open the public pull request")
-    submit.set_defaults(run=cmd_submit)
-    arguments = parser.parse_args(argv)
+    submit.add_argument("--json", action="store_true", help=WINDOW)
+    submit.set_defaults(run=cmd_submit, answer=json_submit)
+    survey_ = commands.add_parser("survey", help="for a window: what `status` and the guide's first two steps "
+                                                 "show, gh's sign-in included, as one JSON object; writes nothing")
+    survey_.add_argument("--json", action="store_true", default=True, help="accepted: survey always answers in JSON")
+    survey_.set_defaults(run=None, answer=json_survey)
+    web = commands.add_parser("web-steps", help="how to send FILE on the web, step by step, as the guide says it "
+                                                "when gh cannot send it from here")
+    web.add_argument("file", metavar="FILE", help="the report to send")
+    web.add_argument("--login", default=None, help="refuse unless the file is filed under this login")
+    web.add_argument("--json", action="store_true", help=WINDOW)
+    web.set_defaults(run=cmd_web_steps, answer=json_web_steps)
+    windowed = "--json" in argv or argv[:1] == ["survey"]
+    arguments = _parse(parser, argv) if windowed else parser.parse_args(argv)
+    if getattr(arguments, "json", False):
+        return answer(arguments)
     try:
         if os.name != "nt":
             raise Refused("Codex Auto Resume is a Windows product, and so is this.")
