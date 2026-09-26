@@ -977,14 +977,22 @@ def cmd_submit(arguments) -> int:
                                     "--author", login, "--json", "url,headRefName"),
                          "the list of open pull requests")
     try:
-        open_ones = [entry.get("url") for entry in json.loads(listed or "[]") if isinstance(entry, dict)
-                     and str(entry.get("headRefName") or "").startswith("compat-report/")]
+        open_ones = [(entry.get("url"), str(entry.get("headRefName") or "")) for entry in json.loads(listed or "[]")
+                     if isinstance(entry, dict) and str(entry.get("headRefName") or "").startswith("compat-report/")]
     except ValueError:
         raise Refused("gh answered the list of open pull requests with something that is not JSON.")
+    own = [url for url, head in open_ones if head == branch]
+    if own:
+        # Most often the project refused it and said why: sending again starts by closing it.
+        raise Refused("Your pull request for this report is still open: %s. Close it on GitHub first - it is "
+                      "yours to close - then run submit --yes again: it resets the branch %s to the project's "
+                      "main, adds the file and opens a new pull request. The project keeps one report pull "
+                      "request per account open at a time." % (", ".join(own), branch))
     if open_ones:
         raise Refused("A report pull request of yours is already open: %s. The project files one report per "
                       "account at a time, and one per GitHub login per Codex version; send this one once that "
-                      "one is closed." % ", ".join(open_ones))
+                      "one is closed (close it on GitHub yourself if you no longer want it filed)."
+                      % ", ".join(url for url, _head in open_ones))
 
     looked = github.api("GET", "repos/" + fork)
     has_fork = not _not_found(looked)
