@@ -444,7 +444,7 @@ class LocalChecksTests(unittest.TestCase):
         with Installation([record()], log_lines=[engine_line(NOW - 7200, VERSION,
                                                              reporter.ENGINE_LOG_WORDS["checked"])]):
             _code, out, _err = run_main("status")
-        self.assertIn("passed on this version (1 log lines)", out)
+        self.assertIn("passed on this version (1 log line)", out)
 
     @unittest.skipUnless(PRODUCT_APP.is_file(), "the product checkout is not beside this one")
     def test_the_wordings_are_the_products_own(self):
@@ -661,6 +661,7 @@ class FakeGh:
                  fork=False, branch=False, copying=0, answers=None):
         self.exe, self.signed_in, self.login = exe, signed_in, login
         self.door, self.filed, self.fork, self.branch = door, filed, fork, branch
+        self.fork_name = "%s/%s" % (login, REPO.split("/")[1])     # the fork GitHub would make for that login
         # (url, head branch) for each open pull request of this login; a bare url is a report's.
         self.open_prs = [(pr, "compat-report/codex-cli-0.155.0") if isinstance(pr, str) else tuple(pr)
                          for pr in open_prs]
@@ -696,6 +697,7 @@ class FakeGh:
 
     def answer(self, key, arguments):
         path, branch = reporter.destination(VERSION, self.login)
+        FORK = self.fork_name  # noqa: N806 - the routes read as GitHub's, for whichever login is signed in
         routes = {
             ("auth status",): (0, "", "") if self.signed_in else (1, "", "You are not logged into any GitHub hosts."),
             ("GET", "user"): (0, self.login, ""),
@@ -1029,6 +1031,241 @@ class SubmitTests(unittest.TestCase):
         self.assertIn("exactly as recorded: " + reporter.PUBLISHED_TIMES + ".", readme)
 
 
+def scripted(answers, asked):
+    """input(), answered from a list: a string is typed, a callable is run (to change something while
+    the person reads) and its answer typed, and the end of the list is the end of the input."""
+    answers = list(answers)
+
+    def answer(prompt):
+        asked.append(prompt)
+        if not answers:
+            raise EOFError
+        given = answers.pop(0)
+        return given() if callable(given) else given
+    return answer
+
+
+# The guide's questions in order, on a machine where gh is signed in as the login.
+LOGIN_Q, OPEN_Q, READ_Q, SEND_Q = "GitHub login", "Open it in Notepad?", "Press Enter", "Type send"
+
+
+class GuideTests(unittest.TestCase):
+    """The guide sends nothing unless `send` is typed, and then exactly the file the person was shown."""
+
+    def setUp(self):
+        self.stack = contextlib.ExitStack()
+        self.installation = self.stack.enter_context(Installation([record()]))
+        root = self.installation.root
+        self.work, self.bin, self.nowhere = root / "work", root / "bin", root / "no-gh"
+        for folder in (self.work, self.bin, self.nowhere):
+            folder.mkdir()
+        self.exe = str(self.bin / "gh.exe")
+        pathlib.Path(self.exe).write_bytes(b"not a real gh")
+        self.stack.enter_context(contextlib.chdir(self.work))
+        self.stack.enter_context(mock.patch.object(reporter.time, "sleep"))
+        self.file = pathlib.Path.cwd() / "codex-cli-0.155.0-alpha.9.2.json"
+
+    def tearDown(self):
+        self.stack.close()
+
+    def guide(self, *answers, gh=True, **fake):
+        """(exit code, what was printed, the fake gh, the questions asked, the windows opened)."""
+        asked, shown = [], []
+        fake_gh = self.gh = FakeGh(self.exe, **fake)      # an answer may change what GitHub will say
+        with mock.patch.object(reporter, "input", scripted(answers, asked), create=True), \
+                mock.patch.object(reporter.subprocess, "run", fake_gh), \
+                mock.patch.object(reporter, "show", lambda program, argument: shown.append((program, argument)) or True), \
+                mock.patch.dict(os.environ, {"PATH": str(self.bin if gh else self.nowhere)}):
+            code, out, err = run_main("guide")
+        return code, out + err, fake_gh, asked, shown
+
+    def questions(self, asked):
+        return [next((word for word in (LOGIN_Q, OPEN_Q, READ_Q, SEND_Q, "Write a new one", "browser")
+                      if word in prompt), prompt) for prompt in asked]
+
+    def test_send_sends_the_bytes_the_person_was_shown_and_nothing_else_sends(self):
+        code, said, gh, asked, shown = self.guide("", "", "", "send")
+        self.assertEqual(code, 0, said)
+        self.assertEqual(self.questions(asked), [LOGIN_Q, OPEN_Q, READ_Q, SEND_Q])
+        self.assertEqual(shown, [(reporter.NOTEPAD, str(self.file))])
+        self.assertEqual(len(gh.uploads), 1)
+        self.assertEqual(base64.b64decode(gh.uploads[0]["content"]), self.file.read_bytes())
+        self.assertEqual([key[0] for key in gh.writes()], ["POST", "POST", "PUT", "pr create"])
+        self.assertIn("opened: https://github.com/%s/pull/7" % REPO, said)
+        self.assertIn(str(self.file), said)
+        self.assertIn("Sending writes to GitHub, as someone:", said)
+
+    def test_anything_but_send_sends_nothing(self):
+        for answer in ("", "yes", "y", "send it", "sned", "--yes", None):
+            with self.subTest(answer):
+                self.file.unlink(missing_ok=True)
+                answers = ("", "", "") + (() if answer is None else (answer,))
+                code, said, gh, asked, _shown = self.guide(*answers)
+                self.assertEqual(code, 0, said)
+                self.assertEqual(self.questions(asked)[-1], SEND_Q)
+                self.assertEqual(gh.writes(), [])
+                self.assertIn("Nothing was sent. The report stays here", said)
+                self.assertTrue(self.file.is_file())
+        self.file.unlink()
+        code, said, gh, _asked, _shown = self.guide("", "", "", " SEND ")
+        self.assertEqual((code, len(gh.uploads)), (0, 1), "the word, in any case and with spaces around it")
+
+    def test_every_question_has_a_default_that_sends_nothing(self):
+        """Stopped after any number of empty answers - the end of the input, and Enter at every question -
+        nothing reaches GitHub, with gh and without it."""
+        for gh in (True, False):
+            for given in range(6):
+                with self.subTest(gh=gh, answers=given):
+                    self.file.unlink(missing_ok=True)
+                    code, said, fake, asked, shown = self.guide(*[""] * given, gh=gh)
+                    self.assertEqual(code, 0, said)
+                    self.assertEqual(fake.writes(), [])
+                    self.assertNotIn(reporter.BROWSER, [program for program, _argument in shown])
+                    self.assertIn("Nothing was", said)
+
+    def test_a_file_edited_while_it_is_read_is_what_is_sent(self):
+        def edit():
+            edited = json.loads(self.file.read_bytes())
+            edited["records"][0]["progress_items"] = None
+            self.file.write_bytes(reporter.encode(edited))
+            return ""
+        code, said, gh, _asked, _shown = self.guide("", "", edit, "send")
+        self.assertEqual(code, 0, said)
+        self.assertIn("The file has changed since it was written", said)
+        self.assertEqual(base64.b64decode(gh.uploads[0]["content"]), self.file.read_bytes())
+        self.assertIsNone(json.loads(base64.b64decode(gh.uploads[0]["content"]))["records"][0]["progress_items"])
+
+    def test_a_file_changed_after_the_question_is_refused_not_sent(self):
+        def change_then_send():
+            self.file.write_bytes(self.file.read_bytes().replace(b'"verdict": "PASS"', b'"verdict": "NONE"'))
+            return "send"
+        code, said, gh, _asked, _shown = self.guide("", "", "", change_then_send)
+        self.assertEqual(code, 2)
+        self.assertIn("has changed: its SHA-256 is", said)
+        self.assertEqual(gh.writes(), [])
+        self.assertIn("Nothing was sent", said)
+
+    def test_a_file_the_project_would_refuse_is_never_offered_to_send(self):
+        def spoil():
+            self.file.write_bytes(b'{"edited": true}')
+            return ""
+        code, said, gh, asked, _shown = self.guide("", "", spoil)
+        self.assertEqual(code, 2)
+        self.assertNotIn(SEND_Q, self.questions(asked))
+        self.assertEqual(gh.calls[2:], [], "after the login, not one more call")
+
+    def test_without_gh_the_file_is_written_and_the_web_way_is_said_and_nothing_sent(self):
+        code, said, gh, asked, shown = self.guide("someone", "n", gh=False)
+        self.assertEqual(code, 0, said)
+        self.assertEqual(gh.calls, [])
+        self.assertEqual(self.questions(asked), [LOGIN_Q, OPEN_Q, "browser"])
+        self.assertEqual(shown, [], "the browser is opened only on a yes")
+        self.assertTrue(self.file.is_file())
+        path, branch = reporter.destination(VERSION, "someone")
+        for step in ("1. Open https://github.com/%s and choose Fork\n" % REPO, "\n         %s\n" % branch,
+                     "\n         %s\n" % path, "Contribute > Open pull request",
+                     "One report pull request of yours may be open at a time"):
+            self.assertIn(step, said)
+        self.assertIn("is not installed here", said)
+        self.file.unlink()
+        code, said, gh, asked, shown = self.guide("someone", "n", "y", gh=False)
+        self.assertEqual(shown, [(reporter.BROWSER, "https://github.com/" + REPO)])
+
+    def test_gh_not_signed_in_or_signed_in_as_another_goes_the_web_way(self):
+        code, said, gh, asked, _shown = self.guide("someone", "n", signed_in=False)
+        self.assertEqual((code, gh.writes()), (0, []))
+        self.assertEqual(asked[0], "  GitHub login: ", "no login is offered when gh has none")
+        self.assertIn("not signed in to github.com here", said)
+        self.assertIn("gh auth login --hostname github.com", said)
+        self.file.unlink()
+        code, said, gh, asked, _shown = self.guide("someone", "n", login="somebody-else")
+        self.assertEqual((code, gh.writes()), (0, []))
+        self.assertEqual(asked[0], "  GitHub login [somebody-else]: ")
+        self.assertIn("signed in here as somebody-else, not someone", said)
+
+    def test_the_login_is_held_to_the_same_rules_and_asked_again(self):
+        code, said, _gh, asked, _shown = self.guide("not a login", "nul", gh=False)
+        self.assertEqual(code, 0)
+        self.assertIn("That is not a GitHub login", said)
+        self.assertIn("Windows keeps that name for a device", said)
+        self.assertEqual(len(asked), 3)
+        self.assertIn("Nothing was written, and nothing was sent.", said)
+        self.assertFalse(self.file.exists())
+        code, said, _gh, asked, _shown = self.guide("a b", "c d", "e f", gh=False)
+        self.assertEqual(code, 2)
+        self.assertFalse(self.file.exists())
+
+    def test_a_file_already_there_is_kept_unless_the_person_says_to_write_over_it(self):
+        report, raw, _notes = reporter.make_report(LOGIN)
+        kept = json.loads(raw)
+        kept["records"][0]["progress_items"] = None
+        self.file.write_bytes(reporter.encode(kept))
+        before = self.file.read_bytes()
+        code, said, gh, asked, _shown = self.guide("", "", "n", "send")
+        self.assertEqual(code, 0, said)
+        self.assertEqual(self.questions(asked), [LOGIN_Q, "Write a new one", OPEN_Q, SEND_Q])
+        self.assertEqual(self.file.read_bytes(), before)
+        self.assertEqual(base64.b64decode(gh.uploads[0]["content"]), before, "the kept file is what is sent")
+        code, said, gh, asked, _shown = self.guide("", "y", "n", "")
+        self.assertNotEqual(self.file.read_bytes(), before)
+        self.assertEqual(gh.writes(), [])
+
+    def test_a_file_there_filed_under_another_login_is_not_taken_for_this_one(self):
+        other = json.loads(reporter.make_report("somebody-else")[1])
+        self.file.write_bytes(reporter.encode(other))
+        code, said, gh, _asked, _shown = self.guide("", "", "n")
+        self.assertEqual(code, 2)
+        self.assertIn("is filed under somebody-else, not someone", said)
+        self.assertEqual(gh.writes(), [])
+
+    def test_a_machine_with_nothing_to_report_stops_before_asking_anything(self):
+        for installation in (Installation(state=False), Installation([], compat={}, log_lines=[])):
+            with self.subTest(installation), installation:
+                code, said, gh, asked, _shown = self.guide("", "", "", "send")
+                self.assertEqual((code, asked, gh.calls), (2, [], []))
+                self.assertIn("Nothing was written, and nothing was sent.", said)
+
+    def test_a_closed_door_or_a_refusal_sends_nothing_and_keeps_the_file(self):
+        code, said, gh, asked, _shown = self.guide("", "", "", "send", door=False)
+        self.assertEqual((code, gh.writes()), (reporter.EXIT_NOT_OPEN, []))
+        self.assertNotIn(SEND_Q, self.questions(asked))
+        self.assertIn("not taking reports yet", said)
+        self.file.unlink()
+        code, said, gh, asked, _shown = self.guide("", "", "", "send", filed=True)
+        self.assertEqual((code, gh.writes()), (2, []))
+        self.assertIn("already filed", said)
+        self.assertIn("Nothing was sent. The report stays here", said)
+
+    def test_a_refusal_after_writes_does_not_say_nothing_was_sent(self):
+        code, said, gh, _asked, _shown = self.guide("", "", "", "send",
+                                                    answers={("pr create",): (1, "", "gh: Validation Failed (HTTP 422)")})
+        self.assertEqual(code, 2)
+        self.assertIn("Already written to GitHub by this run", said)
+        self.assertNotIn("Nothing was sent", said)
+
+    def test_what_sending_writes_is_what_was_listed_when_the_person_was_asked(self):
+        """A fork that appears between the question and the send changes what is written: ask again."""
+        def fork_appears():
+            self.gh.fork = True
+            return "send"
+        code, said, gh, _asked, _shown = self.guide("", "", "", fork_appears)
+        self.assertEqual(code, 2)
+        self.assertIn("changed while you were asked", said)
+        self.assertEqual(gh.writes(), [])
+
+    @unittest.skipUnless(PRODUCT_READER.is_file(), "the product's checkout is not beside this one")
+    def test_the_web_steps_name_the_path_and_branch_the_project_takes(self):
+        spec = importlib.util.spec_from_file_location("community_check_for_tests",
+                                                      PRODUCT / "build" / "community_check.py")
+        check = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(check)
+        _code, said, _gh, _asked, _shown = self.guide("someone", "n", gh=False)
+        path, branch = reporter.destination(VERSION, "someone")
+        self.assertIn("\n         %s\n" % path, said)
+        self.assertEqual(check.REPORT_PATH.fullmatch(path).group(1), "someone")
+        self.assertTrue(branch.startswith(check.BRANCH_PREFIX))
+
+
 class ReadOnlyTests(unittest.TestCase):
     def test_status_report_and_a_dry_run_change_nothing_they_read(self):
         with Installation([record()]) as installation:
@@ -1066,13 +1303,47 @@ class NoConsoleWindowTests(unittest.TestCase):
                                                                                   "check_call", "check_output")
                 and getattr(node.func.value, "id", None) == "subprocess"]
 
+    def tree(self):
+        return ast.parse(pathlib.Path(reporter.__file__).read_text(encoding="utf-8"))
+
+    def shown(self):
+        """The starts inside show(), the one function that opens a window the person asked for."""
+        function = [node for node in ast.walk(self.tree()) if isinstance(node, ast.FunctionDef) and node.name == "show"]
+        self.assertEqual(len(function), 1)
+        return [node for node in ast.walk(function[0]) if isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute) and getattr(node.func.value, "id", None) == "subprocess"]
+
     def test_every_process_it_starts_is_given_a_hidden_console(self):
         calls = self.calls()
         self.assertTrue(calls)
+        windows = [ast.unparse(call) for call in self.shown()]
         for call in calls:
+            if ast.unparse(call) in windows:
+                continue
             flags = [keyword.value for keyword in call.keywords if keyword.arg == "creationflags"]
             self.assertEqual(len(flags), 1, ast.unparse(call))
             self.assertIn("CREATE_NO_WINDOW", ast.unparse(flags[0]))
+
+    def test_the_one_start_without_it_is_a_gui_program_the_person_asked_for_by_its_full_path(self):
+        """Notepad on the report, and File Explorer handed the project's address, which opens the default
+        browser: GUI programs, for which Windows makes no console, named by their path in the Windows folder."""
+        (start,) = self.shown()
+        self.assertEqual(ast.unparse(start.func), "subprocess.Popen")
+        self.assertEqual(ast.unparse(start.args[0]), "[str(program), argument]")
+        self.assertNotIn("shell", [keyword.arg for keyword in start.keywords])
+        callers = [node for node in ast.walk(self.tree()) if isinstance(node, ast.Call)
+                   and isinstance(node.func, ast.Name) and node.func.id == "show"]
+        self.assertEqual(sorted({ast.unparse(call.args[0]) for call in callers}), ["BROWSER", "NOTEPAD"])
+        windows = reporter._windows_folder()
+        self.assertEqual((reporter.NOTEPAD, reporter.BROWSER),
+                         (windows / "System32" / "notepad.exe", windows / "explorer.exe"))
+        self.assertTrue(reporter.NOTEPAD.is_absolute() and reporter.BROWSER.is_absolute())
+
+    def test_the_windows_folder_is_a_full_path_whatever_systemroot_says(self):
+        for value, expected in (("D:\\Windows", "D:\\Windows"), ("", "C:\\Windows"), ("Windows", "C:\\Windows"),
+                                ("\\Windows", "C:\\Windows")):
+            with self.subTest(value), mock.patch.dict(os.environ, {"SystemRoot": value}):
+                self.assertEqual(str(reporter._windows_folder()), expected)
 
     def test_it_starts_no_python_child(self):
         """A Python child would be started with sys.executable, and under pythonw that has no console to
@@ -1136,12 +1407,15 @@ def setUpModule():
     global _no_processes
     import platform
     platform.version()
-    _no_processes = mock.patch.object(subprocess, "run", side_effect=AssertionError("a real process"))
-    _no_processes.start()
+    _no_processes = [mock.patch.object(subprocess, name, side_effect=AssertionError("a real process"))
+                     for name in ("run", "Popen")]
+    for patch in _no_processes:
+        patch.start()
 
 
 def tearDownModule():
-    _no_processes.stop()
+    for patch in _no_processes:
+        patch.stop()
 
 
 if __name__ == "__main__":
