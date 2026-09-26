@@ -13,10 +13,13 @@ codex_compat_report.py answered through its --json interface. What it promises, 
 - sending takes the "I have read it" box and one more question, whose default answer is Cancel, and
   pins the SHA-256 of the bytes the window showed and the writes it listed; every character of the
   file is shown, and a refusal is at the top of its page, in view (SendTests);
-- every page, at 100%, 125%, 150% and 200% and at its smallest size, shows every text whole, no control
-  on another and every control named for a screen reader, in a tab order, with Back, Next and Close at
-  the bottom right, Enter on the default button and Esc on Close, and no access key twice or on Send
-  (PageTests);
+- every page, at 100%, 125%, 150% and 200% and at its smallest size, and at 150% and 200% on a small
+  screen's working area, shows every text whole, no control on another and every control named for a
+  screen reader, in a tab order, with Back, Next and Close at the bottom right, Enter on the default
+  button and Esc on Close, and no access key twice or on Send (PageTests);
+- what differs from one Windows to another - the frame and caption drawn around the window, the working
+  area, visual styles, whether a key or a click was the last input - changes nothing inside it, and a
+  picture without visual styles still has its scroll bars; each is brought about here (ElsewhereTests);
 - the pages are the guide's five steps in the guide's words, and what they show of the machine, the
   report and a send is what the script answered (WordsTests);
 - the README's pictures of it show what it describes today, from the made-up machine's answers, with
@@ -35,6 +38,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import json
+import math
 import os
 import pathlib
 import platform
@@ -65,6 +69,14 @@ import make_window_pictures  # noqa: E402
 GUI = ROOT / "gui"
 SCALES = ("1", "1.25", "1.5", "2")
 SIZES = ("default", "min")
+# What Report.exe brings about for the tests, with --describe and --render only (gui/Program.cs): another
+# working area, no visual styles, another frame. SMALL is the working area of GitHub's Windows runners.
+# CUES has the window made as Windows makes one after a key was the last input: access keys shown.
+AREA, STYLES, FRAME, CUES = ("CODEX_COMPAT_REPORTER_TEST_" + name for name in ("AREA", "STYLES", "FRAME", "CUES"))
+SMALL = {AREA: "1024x720"}
+# The window's inside at 96 DPI (gui/Wizard.cs, Inside and Least): what it opens at, and the least it takes.
+INSIDE = (618, 464)
+LEAST = (498, 344)
 PAGES = ("1", "2", "3", "4", "5")
 LONG_LOGIN = "a" + "-b" * 19                        # 39 characters, the longest login GitHub allows
 PULL_REQUEST = r"^https://github\.com/songyb111-gachon/codex-auto-resume-windows/pull/[0-9]+$"
@@ -220,11 +232,13 @@ def report_exe() -> pathlib.Path:
     return _BUILT["exe"]
 
 
-def run_exe(*argv) -> subprocess.CompletedProcess:
-    """Report.exe with a fixture, and with every home it could read pointed at a folder that is not there."""
+def run_exe(*argv, conditions=None) -> subprocess.CompletedProcess:
+    """Report.exe with a fixture, and with every home it could read pointed at a folder that is not there;
+    under the `conditions` asked for ({AREA: ..., STYLES: ..., FRAME: ...}), and under none but those."""
     nowhere = str(pathlib.Path(WORK.name) / "nowhere")
-    environment = dict(os.environ, USERPROFILE=nowhere, LOCALAPPDATA=nowhere, CODEX_AUTO_RESUME_HOME=nowhere,
-                       CODEX_HOME=nowhere, GH_CONFIG_DIR=nowhere)
+    environment = make_window_pictures.unattended()
+    environment.update(USERPROFILE=nowhere, LOCALAPPDATA=nowhere, CODEX_AUTO_RESUME_HOME=nowhere,
+                       CODEX_HOME=nowhere, GH_CONFIG_DIR=nowhere, **(conditions or {}))
     return subprocess.run([str(report_exe()), *argv], capture_output=True, stdin=subprocess.DEVNULL, timeout=300,
                           env=environment, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
 
@@ -232,18 +246,20 @@ def run_exe(*argv) -> subprocess.CompletedProcess:
 _DESCRIBED = {}
 
 
-def describe(name, pages=("1",), scales=("1",), sizes=("default",), *more, fixture_path=None) -> list:
-    """What Report.exe --describe prints for the fixture: one description a page, scale and size. A fixture
-    of this module's is described once for each question; one written by a test, every time."""
+def describe(name, pages=("1",), scales=("1",), sizes=("default",), *more, fixture_path=None, conditions=None) -> list:
+    """What Report.exe --describe prints for the fixture: one description a page, scale and size, under the
+    `conditions` asked for. A fixture of this module's is described once for each question; one written by
+    a test, every time."""
     argv = ("--fixture", str(fixture_path or path(name)), "--describe", ",".join(pages), "--scale", ",".join(scales),
             "--size", ",".join(sizes), *more)
-    if fixture_path is not None or argv not in _DESCRIBED:
-        done = run_exe(*argv)
+    key = argv + tuple(sorted((conditions or {}).items()))
+    if fixture_path is not None or key not in _DESCRIBED:
+        done = run_exe(*argv, conditions=conditions)
         if done.returncode:
             raise AssertionError("Report.exe --describe failed (%d): %s"
                                  % (done.returncode, done.stderr.decode("utf-8", "replace")))
-        _DESCRIBED[argv] = done.stdout.decode("utf-8")
-    found = json.loads(_DESCRIBED[argv])
+        _DESCRIBED[key] = done.stdout.decode("utf-8")
+    found = json.loads(_DESCRIBED[key])
     return found if isinstance(found, list) else [found]
 
 
@@ -253,6 +269,26 @@ def control(description: dict, name: str) -> dict:
         raise AssertionError("%d controls called %s on page %s (%s)" % (len(found), name, description["page"],
                                                                           [entry["name"] for entry in description["controls"]]))
     return found[0]
+
+
+def px(length: int, scale: float) -> int:
+    """A length at 96 DPI in the window's pixels at `scale`, rounded as Ui.Px rounds: a half away from zero."""
+    return math.floor(length * scale + 0.5)
+
+
+def fitted(description: dict, inside) -> list:
+    """The inside of a window that asks for `inside` (at 96 DPI) at the description's scale, on the working
+    area it was fitted to: the whole window, frame and caption too, is at most the working area."""
+    frame, area = description["frame"], description["area"][2:]
+    return [min(px(length, description["scale"]) + around, most) - around
+            for length, around, most in zip(inside, frame, area)]
+
+
+def strip(png: bytes, description: dict, name: str) -> set:
+    """The colours at the right of the box `name`, inside its border, where its scroll bar is on the screen."""
+    x, y, w, h = control(description, name)["visible"]
+    _width, _height, rows = pixels(png)
+    return {rows[row][column] for row in range(y + 4, y + h - 4) for column in range(x + w - 18, x + w - 4)}
 
 
 def names(description: dict) -> list:
@@ -716,6 +752,10 @@ class PageTests(unittest.TestCase):
     def setUpClass(cls):
         cls.described = {name: describe(name, pages, SCALES, SIZES) for name, pages in SHOWN.items()}
         cls.described["confirm"] = describe("plan", ("confirm",), SCALES, SIZES)
+        # A small screen's working area, which a window at 150% and 200% is too large for: the same pages,
+        # in what is left of it, as on GitHub's runners and on a person's small screen.
+        for name, pages in SHOWN.items():
+            cls.described[name + " on 1024x720"] = describe(name, pages, ("1.5", "2"), SIZES, conditions=SMALL)
 
     def every(self):
         for name, descriptions in self.described.items():
@@ -818,19 +858,22 @@ class PageTests(unittest.TestCase):
                 self.assertEqual(description["accept"], "next" if description["at"] < 5 else ("send" if sends else "close"))
 
     def test_the_window_scales_and_has_a_sensible_smallest_size(self):
+        """Its inside is what is fixed, at each scale: 618 x 464 at 96 DPI, and 498 x 344 at the least,
+        whatever frame and caption Windows draws around it. On a working area too small for the whole
+        window, it is the working area's size, and its inside what the frame leaves: exactly that."""
+        small = 0
         for where, description in self.every():
             if description["page"] == "confirm":
                 continue
             with self.subTest(where):
-                scale = description["scale"]
-                minimum = description["minimum"][2:]
-                self.assertEqual(minimum, [round(520 * scale), round(400 * scale)])
+                least = fitted(description, LEAST)
+                self.assertEqual(description["minimum"][2:], least)
                 client = description["client"][2:]
-                if description["size"] == "min":
-                    self.assertTrue(client[0] < minimum[0] and client[1] < minimum[1], "the frame is outside the minimum")
-                else:
-                    self.assertEqual(client, [description["client"][2], description["client"][3]])
-                    self.assertGreater(client[0], minimum[0] - 40 * scale, "it opens larger than its smallest size")
+                self.assertEqual(client, least if description["size"] == "min" else fitted(description, INSIDE))
+                outer = [length + around for length, around in zip(client, description["frame"])]
+                self.assertTrue(all(length <= most for length, most in zip(outer, description["area"][2:])))
+                small += outer[1] == description["area"][3] == 720
+        self.assertGreater(small, 0, "a window the small working area is too short for is as tall as it")
 
 
 # -------------------------------------------------------------------------------- words
@@ -903,11 +946,8 @@ class PictureTests(unittest.TestCase):
     def test_a_box_that_scrolls_has_its_scroll_bar_in_the_picture(self):
         """An edit control paints its scroll bar on the screen only: Report.exe --render draws it, so the
         picture of the fourth page says the report goes on below what the box shows."""
-        description = self.described["window-4.png"]
-        x, y, w, h = control(description, "file")["visible"]
-        _width, _height, rows = pixels((ROOT / "docs" / "images" / "window-4.png").read_bytes())
-        strip = {rows[row][column] for row in range(y + 4, y + h - 4) for column in range(x + w - 18, x + w - 4)}
-        self.assertGreater(len(strip), 4, "one colour: the strip is blank")
+        png = (ROOT / "docs" / "images" / "window-4.png").read_bytes()
+        self.assertGreater(len(strip(png, self.described["window-4.png"], "file")), 4, "one colour: the strip is blank")
 
     def test_they_show_the_five_steps_and_the_fifth_ready_to_send(self):
         self.assertEqual([page for _name, page in make_window_pictures.PICTURES], list(PAGES))
@@ -933,6 +973,97 @@ class PictureTests(unittest.TestCase):
         self.assertIsNone(control(plain[4], "have_read")["visible"], "without --end the fifth page opens at its top")
         done = run_exe("--fixture", str(self.answered), "--describe", "1", "--font", "No Such Family Anywhere")
         self.assertNotEqual(done.returncode, 0, "a family that is not installed is refused, not drawn in another")
+
+
+
+# ---------------------------------------------------------------------- other machines
+class ElsewhereTests(unittest.TestCase):
+    """What differs from one Windows to another, brought about here by Report.exe's test conditions, as
+    GitHub's runners have them: a frame and caption of other metrics (624 x 481 inside 640 x 520 there,
+    618 x 464 here), a working area of 1024 x 720, a session with no visual styles; and a window made
+    after a key rather than a click. Each test holds that its condition was brought about: a condition
+    Report.exe did not heed would prove nothing."""
+
+    def test_the_inside_is_the_same_whatever_frame_windows_draws(self):
+        """Wherever the working area holds the whole window, frame and all: where it does not, what is
+        left of it for the inside is what the frame leaves, as the test above holds."""
+        plain = describe("plan", PAGES, SCALES, SIZES)
+        for frame in ("None", "FixedSingle"):
+            framed = describe("plan", PAGES, SCALES, SIZES, conditions={FRAME: frame})
+            for before, after in zip(plain, framed):
+                with self.subTest(frame=frame, page=before["page"], scale=before["scale"], size=before["size"]):
+                    self.assertNotEqual(after.get("frame"), before.get("frame"), "another frame is drawn")
+                    inside = LEAST if after["size"] == "min" else INSIDE
+                    self.assertEqual(after["client"][2:], fitted(after, inside))
+                    if fitted(before, inside) != [px(length, before["scale"]) for length in inside]:
+                        continue
+                    self.assertEqual((after["client"], after["minimum"]), (before["client"], before["minimum"]))
+                    self.assertEqual([(entry["name"], entry["bounds"]) for entry in after["controls"]],
+                                     [(entry["name"], entry["bounds"]) for entry in before["controls"]])
+
+    def test_on_a_small_screen_the_whole_window_is_the_working_area_at_most(self):
+        for description in describe("plan", PAGES, SCALES, SIZES, conditions=SMALL):
+            where = "page %s at %s, %s size" % (description["page"], description["scale"], description["size"])
+            with self.subTest(where):
+                area = description.get("area")
+                self.assertEqual(area and area[2:], [1024, 720], "the working area asked for is the one fitted to")
+                outer = [length + around for length, around in zip(description["client"][2:], description["frame"])]
+                wanted = [px(length, description["scale"]) + around
+                          for length, around in zip(LEAST if description["size"] == "min" else INSIDE,
+                                                    description["frame"])]
+                self.assertEqual(outer, [min(length, most) for length, most in zip(wanted, (1024, 720))])
+                if description["scale"] == 2 and description["size"] == "default":
+                    self.assertEqual(outer[1], 720, "at 200% the window is as tall as the working area")
+                if description["scale"] == 1:
+                    self.assertEqual(description["client"][2:], list(INSIDE if description["size"] == "default"
+                                                                     else LEAST))
+        done = run_exe("--fixture", str(path("plan")), "--describe", "1", conditions={AREA: "99999x720"})
+        self.assertEqual(done.returncode, 2, "an area larger than this screen's is refused, not fitted to this one")
+        for name, value in ((AREA, "1024 by 720"), (STYLES, "off"), (FRAME, "Thin"), (CUES, "on")):
+            with self.subTest(name, value=value):
+                done = run_exe("--fixture", str(path("plan")), "--describe", "1", conditions={name: value})
+                self.assertEqual(done.returncode, 2, "a condition not understood is refused")
+
+    def test_without_visual_styles_a_box_that_scrolls_still_has_its_scroll_bar(self):
+        """Where Windows draws no visual styles, as in a service's session, --render draws the scroll bar
+        of a box that scrolls in the classic style: never a blank strip."""
+        more = ("--have-read", "--end", "--font", "Segoe UI")
+        for conditions in ({STYLES: "none"}, {STYLES: "none", FRAME: "FixedSingle", **SMALL}):
+            with self.subTest(conditions=conditions):
+                (description,) = describe("plan", ("4",), ("1",), ("default",), *more, conditions=conditions)
+                self.assertIs(description.get("visual_styles"), False, "drawn without visual styles")
+                shot = pathlib.Path(WORK.name) / "classic.png"
+                done = run_exe("--fixture", str(path("plan")), "--render", "4", "--out", str(shot), *more,
+                               conditions=conditions)
+                self.assertEqual(done.returncode, 0, done.stderr.decode("utf-8", "replace"))
+                png = shot.read_bytes()
+                self.assertEqual(list(struct.unpack(">II", make_pictures.chunks(png)[0][1][:8])),
+                                 description["client"][2:])
+                self.assertGreater(len(strip(png, description, "file")), 4, "one colour: the strip is blank")
+
+    def test_a_page_is_drawn_as_opened_with_the_mouse_whatever_was_last_done_here(self):
+        """Windows makes a window with its access keys and focus shown when a key was the last input, and
+        hidden after a click: Report.exe is opened with the mouse, and --render draws that, so a picture
+        does not change with what was last done on the machine that made it."""
+        more = ("--have-read", "--end", "--font", "Segoe UI")
+        drawn = []
+        for conditions in ({}, {CUES: "shown"}):
+            shot = pathlib.Path(WORK.name) / "cues.png"
+            done = run_exe("--fixture", str(path("plan")), "--render", "5", "--out", str(shot), *more,
+                           conditions=conditions)
+            self.assertEqual(done.returncode, 0, done.stderr.decode("utf-8", "replace"))
+            drawn.append(pixels(shot.read_bytes()))
+            (description,) = describe("plan", ("5",), ("1",), ("default",), *more, conditions=conditions)
+            with self.subTest(conditions=conditions):
+                if conditions:
+                    self.assertIs(description.get("keyboard_cues_when_made"), True, "made as after a key")
+                self.assertIs(description.get("keyboard_cues"), False, "drawn as after a click")
+        self.assertTrue(drawn[0] == drawn[1], "the same picture after a key as after a click")
+
+    def test_the_pictures_are_drawn_under_no_condition_but_this_windows(self):
+        with mock.patch.dict(os.environ, {AREA: "640x480", STYLES: "none", FRAME: "None", CUES: "shown"}):
+            environment = make_window_pictures.unattended()
+        self.assertFalse([name for name in environment if name.upper().startswith("CODEX_COMPAT_REPORTER_TEST_")])
 
 
 if __name__ == "__main__":

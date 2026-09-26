@@ -88,7 +88,13 @@ namespace CodexCompatReporter
         bool sendKept;
         bool haveRead;
 
-        public ReportForm(Ui ui, ICore core, bool unattended, string version)
+        // The window's inside at 96 DPI, which is what is fixed: the size it opens at, and the least it can be
+        // made. Windows draws a frame and a caption of its own metrics around it - one Windows draws 640 x 520
+        // around 618 x 464, another around 624 x 481 - so an outer size would leave the inside to the frame.
+        internal static readonly Size Inside = new Size(618, 464);
+        internal static readonly Size Least = new Size(498, 344);
+
+        public ReportForm(Ui ui, ICore core, bool unattended, string version, Rectangle area)
         {
             this.ui = ui;
             this.core = core;
@@ -101,14 +107,7 @@ namespace CodexCompatReporter
             Text = "codex-compat-reporter";
             AccessibleName = "codex-compat-reporter";
             StartPosition = FormStartPosition.CenterScreen;
-            MinimumSize = new Size(ui.Px(520), ui.Px(400));
-            Size = new Size(ui.Px(640), ui.Px(520));
-            if (!unattended)
-            {
-                Rectangle area = Screen.PrimaryScreen.WorkingArea;
-                MinimumSize = new Size(Math.Min(MinimumSize.Width, area.Width), Math.Min(MinimumSize.Height, area.Height));
-                Size = new Size(Math.Min(Width, area.Width), Math.Min(Height, area.Height));
-            }
+            Fit(area);
 
             title = new Label();
             title.Name = "title";
@@ -164,6 +163,20 @@ namespace CodexCompatReporter
         public int Page
         {
             get { return page; }
+        }
+
+        // The window sized by its inside, Inside and never less than Least, with the frame this Windows draws
+        // around it; on a working area too small for that - a small screen, or a large scale - the whole
+        // window is at most the working area, and its inside what the frame leaves of it. It is put at the
+        // area's corner first: WinForms measures a smallest size against the working area it lies in, and
+        // takes 2 pixels more off one that does not lie inside it. Again after the frame changed.
+        public void Fit(Rectangle area)
+        {
+            Size wanted = SizeFromClientSize(new Size(ui.Px(Inside.Width), ui.Px(Inside.Height)));
+            Size least = SizeFromClientSize(new Size(ui.Px(Least.Width), ui.Px(Least.Height)));
+            Location = area.Location;
+            MinimumSize = new Size(Math.Min(least.Width, area.Width), Math.Min(least.Height, area.Height));
+            Size = new Size(Math.Min(wanted.Width, area.Width), Math.Min(wanted.Height, area.Height));
         }
 
         // ------------------------------------------------------------------------------- layout

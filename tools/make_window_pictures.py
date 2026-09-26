@@ -117,11 +117,19 @@ def carried(png: bytes) -> str | None:
     return make_pictures.carried(png, KEYWORD)
 
 
+# The conditions of other machines that Report.exe brings about for the tests (gui/Program.cs): never
+# passed on from this environment, so no picture is drawn under one.
+CONDITIONS = "CODEX_COMPAT_REPORTER_TEST_"
+
+
 def unattended() -> dict:
-    """Report.exe's environment: every home it could read pointed at a folder that is not there."""
+    """Report.exe's environment: every home it could read pointed at a folder that is not there, and none
+    of the conditions the tests bring about."""
     nowhere = str(pathlib.Path(tempfile.gettempdir()) / "codex-compat-window-pictures-nowhere")
-    return dict(os.environ, USERPROFILE=nowhere, LOCALAPPDATA=nowhere, CODEX_AUTO_RESUME_HOME=nowhere,
-                CODEX_HOME=nowhere, GH_CONFIG_DIR=nowhere)
+    environment = {name: value for name, value in os.environ.items() if not name.upper().startswith(CONDITIONS)}
+    environment.update(USERPROFILE=nowhere, LOCALAPPDATA=nowhere, CODEX_AUTO_RESUME_HOME=nowhere,
+                       CODEX_HOME=nowhere, GH_CONFIG_DIR=nowhere)
+    return environment
 
 
 def report_exe(exe: pathlib.Path, *argv) -> bytes:

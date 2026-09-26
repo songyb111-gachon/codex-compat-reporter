@@ -9,11 +9,25 @@
 //       reporter the window asked for on the way, its arguments as given. No window is shown. Given lists -
 //       --describe 1,2,3 --scale 1,1.5 --size default,min - it prints a JSON array, one object for each.
 //   Report.exe --fixture <json> --render <1-5 | confirm> --out <png> [--scale ...] [--size min] [--have-read]
-//       draws that page off-screen into a PNG, with the scroll bar of each box that scrolls.
+//       draws that page off-screen into a PNG, with the scroll bar of each box that scrolls, and its access
+//       keys and focus hidden, as in a window opened with the mouse.
 //
 // Two more, for the README's pictures (tools/make_window_pictures.py): --font <family> draws in that
 // family, at the system font's size, as a Windows whose message font it is would - Segoe UI, Windows'
 // own, where this machine's is another; --end shows the page scrolled to its end, as after reading down it.
+//
+// Four conditions of other machines, which the tests bring about here (tests/test_window.py), read from
+// the environment with --describe and --render only - never by the window, nor by --where:
+//   CODEX_COMPAT_REPORTER_TEST_AREA=<width>x<height>   a working area of that size, at the corner of this
+//       screen's, in its place: a small screen's, such as the 1024 x 720 of GitHub's runners;
+//   CODEX_COMPAT_REPORTER_TEST_STYLES=none   no visual styles, as in a session Windows draws none in, a
+//       service's such as a runner's: the controls are classic, and so is each scroll bar --render draws;
+//   CODEX_COMPAT_REPORTER_TEST_FRAME=<a FormBorderStyle>   another frame and caption around the window,
+//       FixedSingle's or none at all, as a Windows of other metrics draws them: the inside is what it keeps;
+//   CODEX_COMPAT_REPORTER_TEST_CUES=shown   the access keys and the focus shown when the window is made, as
+//       Windows makes a window after a key was the last input: a page is drawn as opened with the mouse.
+// Any other value is refused, and so is an area larger than this screen's working area, which WinForms
+// would fit the window to instead: a condition asked for is brought about, or nothing is drawn.
 //
 // And one that reads this machine, to say where the window would take the reporter from, and starts
 // nothing: Report.exe --where prints, as JSON, the folder it counts as its own, the script it would run,
@@ -42,7 +56,8 @@ namespace CodexCompatReporter
             Application.SetCompatibleTextRenderingDefault(false);
             if (arguments.Length == 0)
             {
-                Application.Run(new ReportForm(Ui.ForScreen(), new LiveCore(), false, Application.ProductVersion));
+                Application.Run(new ReportForm(Ui.ForScreen(), new LiveCore(), false, Application.ProductVersion,
+                                               Screen.PrimaryScreen.WorkingArea));
                 return 0;
             }
             try
@@ -58,12 +73,14 @@ namespace CodexCompatReporter
     }
 
     // Where the window is after it was driven: the page it is at, in which of that page's states, and
-    // what it asked the reporter on the way, each run's arguments as the window gave them.
+    // what it asked the reporter on the way, each run's arguments as the window gave them; and whether
+    // Windows made it with its access keys shown.
     internal sealed class Where
     {
         public readonly string State;
         public readonly int At;
         public readonly List<string[]> Asked;
+        public bool CuesWhenMade;
 
         public Where(string state, int at, List<string[]> asked)
         {
@@ -98,6 +115,42 @@ namespace CodexCompatReporter
         static bool IsPage(string what)
         {
             return what == "confirm" || what == "1" || what == "2" || what == "3" || what == "4" || what == "5";
+        }
+
+        const string AreaVariable = "CODEX_COMPAT_REPORTER_TEST_AREA";
+        const string StylesVariable = "CODEX_COMPAT_REPORTER_TEST_STYLES";
+        const string FrameVariable = "CODEX_COMPAT_REPORTER_TEST_FRAME";
+        const string CuesVariable = "CODEX_COMPAT_REPORTER_TEST_CUES";
+        const int WM_UPDATEUISTATE = 0x0128;
+        const int WM_QUERYUISTATE = 0x0129;
+        const int UIS_SET = 1;
+        const int UIS_CLEAR = 2;
+        const int UISF_HIDEFOCUS = 0x1;
+        const int UISF_HIDEACCEL = 0x2;
+
+        // The working area the window is fitted to: this screen's, or the smaller one the tests ask for.
+        static bool Area(out Rectangle area)
+        {
+            area = Screen.PrimaryScreen.WorkingArea;
+            string asked = Environment.GetEnvironmentVariable(AreaVariable);
+            if (asked == null)
+            {
+                return true;
+            }
+            string[] sides = asked.Split('x');
+            int width;
+            int height;
+            if (sides.Length != 2 ||
+                !int.TryParse(sides[0], NumberStyles.None, CultureInfo.InvariantCulture, out width) ||
+                !int.TryParse(sides[1], NumberStyles.None, CultureInfo.InvariantCulture, out height) ||
+                width < 1 || height < 1 || width > area.Width || height > area.Height)
+            {
+                Error(AreaVariable + " is <width>x<height>, no larger than this screen's working area, " + area.Width +
+                      "x" + area.Height + ": " + asked);
+                return false;
+            }
+            area = new Rectangle(area.Location, new Size(width, height));
+            return true;
         }
 
         public static int Run(string[] arguments)
@@ -189,6 +242,25 @@ namespace CodexCompatReporter
                 Error(Usage);
                 return 2;
             }
+            Rectangle area;
+            if (!Area(out area))
+            {
+                return 2;
+            }
+            string styles = Environment.GetEnvironmentVariable(StylesVariable);
+            string frame = Environment.GetEnvironmentVariable(FrameVariable);
+            string cues = Environment.GetEnvironmentVariable(CuesVariable);
+            if ((styles != null && styles != "none") || (cues != null && cues != "shown") ||
+                (frame != null && (frame.Trim() != frame || !Enum.IsDefined(typeof(FormBorderStyle), frame))))
+            {
+                Error(StylesVariable + " is none and " + CuesVariable + " shown when they are set, and " +
+                      FrameVariable + " one of " + string.Join(", ", Enum.GetNames(typeof(FormBorderStyle))));
+                return 2;
+            }
+            if (styles != null)
+            {
+                Application.VisualStyleState = VisualStyleState.NoneEnabled;
+            }
             JsonObject fixture = JsonObject.From(Json.Parse(File.ReadAllText(fixturePath, new UTF8Encoding(false))));
             if (fixture == null)
             {
@@ -202,7 +274,10 @@ namespace CodexCompatReporter
                 {
                     foreach (string size in sizes)
                     {
-                        Form form = Made(fixture, page, scale, size == "min", haveRead, family, end);
+                        Form form = Made(fixture, page, scale, size == "min", haveRead, family, end, area,
+                                         frame == null ? (FormBorderStyle?)null
+                                                       : (FormBorderStyle)Enum.Parse(typeof(FormBorderStyle), frame),
+                                         cues != null);
                         if (form == null)
                         {
                             Error("the fixture does not reach the question asked before sending");
@@ -216,7 +291,7 @@ namespace CodexCompatReporter
                             }
                             else
                             {
-                                described.Add(Describe(form, page, scale, size));
+                                described.Add(Describe(form, page, scale, size, area));
                             }
                         }
                     }
@@ -231,13 +306,19 @@ namespace CodexCompatReporter
 
         // The window at a page, as the person would find it there with the fixture's answers: made, laid
         // out and drawn off-screen, never shown. For "confirm", the question asked before sending. With
-        // `end`, the page scrolled to its end.
+        // `end`, the page scrolled to its end; with a `frame`, in that frame, and fitted again; with `cues`,
+        // made as after a key.
         static Form Made(JsonObject fixture, string page, float scale, bool smallest, bool haveRead, string family,
-                         bool end)
+                         bool end, Rectangle area, FormBorderStyle? frame, bool cues)
         {
             Ui ui = Ui.ForScale(scale, family);
             FixtureCore core = new FixtureCore(fixture);
-            ReportForm wizard = new ReportForm(ui, core, true, Application.ProductVersion);
+            ReportForm wizard = new ReportForm(ui, core, true, Application.ProductVersion, area);
+            if (frame != null)
+            {
+                wizard.FormBorderStyle = frame.Value;
+                wizard.Fit(area);
+            }
             if (smallest)
             {
                 wizard.Size = wizard.MinimumSize;
@@ -261,7 +342,7 @@ namespace CodexCompatReporter
                 wizard.Drive(int.Parse(page, CultureInfo.InvariantCulture), haveRead, fixture.Has("sent"));
                 form.Tag = new Where(wizard.State(), wizard.Page, core.Asked);
             }
-            Prepare(form);
+            Prepare(form, cues);
             if (end)
             {
                 foreach (Control found in form.Controls.Find("page", false))
@@ -287,10 +368,19 @@ namespace CodexCompatReporter
             return form;
         }
 
-        // Every window handle made, and every layout done, as they would be on the screen.
-        static void Prepare(Form form)
+        // Every window handle made, and every layout done, as they would be on the screen - with the access
+        // keys and the focus hidden, as in a window opened with the mouse, the way Report.exe is opened.
+        // Windows makes a window with them shown when a key was the last input on the machine, so a page
+        // drawn without this would show them or not by what was last done here, a click or a key.
+        static void Prepare(Form form, bool cues)
         {
             Handles(form);
+            if (cues)
+            {
+                Cues(form, UIS_CLEAR);
+            }
+            ((Where)form.Tag).CuesWhenMade = CuesShown(form);
+            Cues(form, UIS_SET);
             for (int pass = 0; pass < 2; pass++)
             {
                 Layouts(form);
@@ -300,6 +390,21 @@ namespace CodexCompatReporter
                     confirm.Arrange();
                 }
             }
+        }
+
+        // Sets (UIS_SET) or clears (UIS_CLEAR) the window's hiding of its access keys and focus, and so
+        // its controls': Windows passes the message on to each of them.
+        static void Cues(Form form, int action)
+        {
+            int hidden = UISF_HIDEFOCUS | UISF_HIDEACCEL;
+            Native.SendMessage(form.Handle, WM_UPDATEUISTATE, new IntPtr(action | hidden << 16), IntPtr.Zero);
+        }
+
+        // Whether the window shows its access keys, as Windows keeps it.
+        static bool CuesShown(Form form)
+        {
+            return (Native.SendMessage(form.Handle, WM_QUERYUISTATE, IntPtr.Zero, IntPtr.Zero).ToInt32() &
+                    UISF_HIDEACCEL) == 0;
         }
 
         static void Handles(Control control)
@@ -339,8 +444,16 @@ namespace CodexCompatReporter
             return found;
         }
 
-        static Ordered Describe(Form form, string what, float scale, string size)
+        // What the page shows, and where: the window's inside ("client"), the least it can be made
+        // ("minimum", an inside too), the frame and caption Windows draws around it, the working area it
+        // was fitted to, whether Windows draws it in visual styles, and whether it shows its access keys, and
+        // showed them when it was made.
+        static Ordered Describe(Form form, string what, float scale, string size, Rectangle area)
         {
+            Size frame = form.Size - form.ClientSize;
+            List<object> around = new List<object>();
+            around.Add(frame.Width);
+            around.Add(frame.Height);
             List<object> controls = new List<object>();
             Walk(form, form, new List<int>(), new Rectangle(Point.Empty, form.ClientSize), controls);
             Control focused = form.ActiveControl;
@@ -357,7 +470,13 @@ namespace CodexCompatReporter
                 .Add("size", size)
                 .Add("title", form.Text)
                 .Add("client", Box(new Rectangle(Point.Empty, form.ClientSize)))
-                .Add("minimum", Box(new Rectangle(Point.Empty, form.MinimumSize)))
+                .Add("minimum", form.MinimumSize.IsEmpty ? null
+                                                         : Box(new Rectangle(Point.Empty, form.MinimumSize - frame)))
+                .Add("frame", around)
+                .Add("area", Box(area))
+                .Add("visual_styles", Application.RenderWithVisualStyles)
+                .Add("keyboard_cues", CuesShown(form))
+                .Add("keyboard_cues_when_made", ((Where)form.Tag).CuesWhenMade)
                 .Add("accept", form.AcceptButton is Control ? ((Control)form.AcceptButton).Name : null)
                 .Add("cancel", form.CancelButton is Control ? ((Control)form.CancelButton).Name : null)
                 .Add("focus", focused == null ? null : focused.Name)
