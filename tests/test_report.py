@@ -861,6 +861,21 @@ class SubmitTests(unittest.TestCase):
         gh, code, _out, err = self.submit(str(self.file), "--yes", "--login", "other")
         self.assertEqual((code, gh.calls), (2, []))
 
+    def test_the_projects_owner_is_refused_before_any_call_to_github(self):
+        """GitHub cannot fork a repository into its owner's account, and the owner's machine is the
+        project's own evidence: the refusal says where it goes, not "rename that repository"."""
+        owner = REPO.split("/")[0]
+        for n, login in enumerate((owner, owner.upper())):
+            with self.subTest(login):
+                mine = self.work / ("owner-%d.json" % n)
+                code, _out, err = run_main("report", "--login", login, "--out", str(mine))
+                self.assertEqual(code, 0, err)
+                gh, code, _out, err = self.submit(str(mine), "--yes", login=login)
+                self.assertEqual((code, gh.calls), (2, []))
+                self.assertIn("owns %s" % REPO, err)
+                self.assertIn("maintainer's tool", err)
+                self.assertNotIn("Rename", err)
+
     def test_a_file_filed_under_the_login_in_another_letter_case_says_how_github_spells_it(self):
         """Not "signed in as someone, so ... Someone cannot be sent": it is the same account, and the
         project takes the report only under someone (community_check.py compares the folder exactly)."""

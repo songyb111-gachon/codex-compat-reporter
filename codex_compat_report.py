@@ -23,7 +23,7 @@ leaves the machine.
 What it cannot do: make a Codex version "verified" for anybody else. A report has a grade of its
 own, Reported: it stands beside the ladder of four words - verified, checked, compatible, failed
 here - and never on it, and never raises a version's tier. It is shown beside the version with the
-number of machines that said the same thing, and a version whose own evidence says nothing stays
+number of reports that said the same thing, and a version whose own evidence says nothing stays
 compatible however many reports arrive. The tool measures; the project recomputes every derived
 field from the measurements when the report arrives, so a hand-edited conclusion does not survive.
 Nothing here proves a file was not made up on the machine that sent it, and the project says so out
@@ -54,7 +54,7 @@ import sys
 import tempfile
 import time
 
-__version__ = "1.3.0"
+__version__ = "1.3.1"
 
 REPO = "songyb111-gachon/codex-auto-resume-windows"
 HOST = "github.com"                             # every GitHub call names it; GH_HOST never redirects one
@@ -842,7 +842,7 @@ def _same_folder(entry: pathlib.Path, folder: pathlib.Path) -> bool:
 
 def find_gh(path: str | None = None):
     """gh.exe from an absolute PATH entry, or None. Never the current folder, nor the folder this
-    script sits in, however PATH spells them (an absolute entry, `\.`, `..`, an 8.3 name): Windows
+    script sits in, however PATH spells them (`.`, `.\\`, `..`, an absolute path, an 8.3 name): Windows
     would otherwise start a gh.exe that sits beside a downloaded script before the real one."""
     unsafe = [pathlib.Path.cwd(), pathlib.Path(__file__).resolve().parent]
     for entry in (os.environ.get("PATH", "") if path is None else path).split(os.pathsep):
@@ -1002,6 +1002,12 @@ def prepare_submit(path, *, login=None, sha256=None, say=print):
     if login and login != filed_as:
         raise Refused("The file is filed under %s, not %s." % (filed_as, login))
     login = filed_as
+    if login.casefold() == REPO.split("/")[0].casefold():
+        # GitHub cannot fork a repository into the account that owns it, and the owner's machine is
+        # not a community report: its evidence goes into the compatibility data itself.
+        raise Refused("%s owns %s, so this machine's evidence is the project's own: it goes into the "
+                      "compatibility data with the maintainer's tool, not in as a community report. "
+                      "Nothing was sent." % (login, REPO))
     digest = hashlib.sha256(raw).hexdigest()
     if sha256 and sha256.strip().lower() != digest:
         raise Refused("%s has changed: its SHA-256 is %s, not %s." % (path, digest, sha256))
