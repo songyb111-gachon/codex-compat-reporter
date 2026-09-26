@@ -10,7 +10,10 @@ strangers. What it promises, and where each promise is held:
 - what is sent is exactly the file the person read, and only after they said yes (SubmitTests),
 - a file the project would refuse is refused here first (ValidateTests),
 - nothing it starts puts a console window on the screen (NoConsoleWindowTests),
-- the command line says what happened, in words and in its exit code (CliTests).
+- the command line says what happened, in words and in its exit code (CliTests),
+- a window hears, as exactly one JSON object, what the words say, from the same functions, with the
+  same refusals and exit codes (JsonSurveyTests, JsonReportTests, JsonSubmitTests, JsonWebStepsTests,
+  OneSourceTests, JsonPlumbingTests).
 
 Everything runs on synthetic installations in temporary folders; nothing here reads this
 machine's own homes, and no test starts a real gh.
@@ -734,8 +737,8 @@ class FakeGh:
         return [key for key in self.verbs() if key[0] in ("POST", "PUT", "PATCH", "DELETE", "pr create")]
 
 
-class SubmitTests(unittest.TestCase):
-    """What leaves the machine, and when."""
+class Sending(unittest.TestCase):
+    """A report written in a work folder, and gh on PATH played by FakeGh: what the submit tests start from."""
 
     def setUp(self):
         self.stack = contextlib.ExitStack()
@@ -767,6 +770,10 @@ class SubmitTests(unittest.TestCase):
     def uploaded(self, gh):
         self.assertEqual(len(gh.uploads), 1)
         return base64.b64decode(gh.uploads[0]["content"])
+
+
+class SubmitTests(Sending):
+    """What leaves the machine, and when."""
 
     def test_the_exact_calls_of_a_first_report_and_the_bytes_they_carry(self):
         gh, code, out, err = self.submit(str(self.file), "--yes")
@@ -1082,8 +1089,9 @@ def scripted(answers, asked):
 LOGIN_Q, OPEN_Q, READ_Q, SEND_Q = "GitHub login", "Open it in Notepad?", "Press Enter", "Type send"
 
 
-class GuideTests(unittest.TestCase):
-    """The guide sends nothing unless `send` is typed, and then exactly the file the person was shown."""
+class Guided(unittest.TestCase):
+    """An installation with a work folder, gh on PATH or not, and the guide answered from a list: what the
+    guide's tests start from."""
 
     def setUp(self):
         self.stack = contextlib.ExitStack()
@@ -1115,6 +1123,10 @@ class GuideTests(unittest.TestCase):
     def questions(self, asked):
         return [next((word for word in (LOGIN_Q, OPEN_Q, READ_Q, SEND_Q, "Write a new one", "browser")
                       if word in prompt), prompt) for prompt in asked]
+
+
+class GuideTests(Guided):
+    """The guide sends nothing unless `send` is typed, and then exactly the file the person was shown."""
 
     def test_send_sends_the_bytes_the_person_was_shown_and_nothing_else_sends(self):
         code, said, gh, asked, shown = self.guide("", "", "", "send")
@@ -1339,6 +1351,470 @@ class GuideTests(unittest.TestCase):
         self.assertIn("\n         %s\n" % path, said)
         self.assertEqual(check.REPORT_PATH.fullmatch(path).group(1), "someone")
         self.assertTrue(branch.startswith(check.BRANCH_PREFIX))
+
+
+# ------------------------------------------------------------------------------ --json, for a window
+REFUSAL_KEYS = {"ok", "refused", "exit"}
+GH_KEYS = {"path", "signed_in", "login"}
+SURVEY_KEYS = {"ok", "tool_version", "installation", "product_version", "engine_version", "engine_from_log",
+               "records", "hidden", "local_checks", "report_file", "blocked", "lines", "gh", "default_login"}
+RECORDS_KEYS = {"found", "total", "on_this_version", "other_versions", "not_placed", "not_placed_why", "problem",
+                "text"}
+REPORT_KEYS = {"ok", "path", "codex_version", "verdict", "login", "records", "span", "bytes", "sha256",
+               "left_out", "lines"}
+LEFT_OUT_KEYS = {"hidden", "other_versions", "not_placed", "not_placed_why", "text"}
+SUBMIT_KEYS = {"ok", "file", "bytes", "sha256", "codex_version", "verdict", "records", "login", "repository",
+               "target", "branch", "fork", "fork_exists", "branch_exists", "gh", "writes", "url", "written",
+               "after", "lines"}
+WEB_KEYS = {"ok", "file", "bytes", "sha256", "login", "codex_version", "target", "branch", "project_page", "why",
+            "steps", "lines", "gh"}
+
+
+def run_json(*argv):
+    """(exit code, the one JSON object, stderr): fails unless stdout is exactly one JSON object on one line."""
+    code, out, err = run_main(*argv)
+    if not out.endswith("\n") or out.count("\n") != 1:
+        raise AssertionError("not one line on stdout: %r (stderr %r)" % (out, err))
+    found, end = json.JSONDecoder().raw_decode(out)
+    if out[end:] != "\n" or not isinstance(found, dict):
+        raise AssertionError("not exactly one JSON object: %r" % out)
+    return code, found, err
+
+
+def refusal(code, err):
+    """The object a window hears for what the console says on stderr and in its exit code."""
+    return {"ok": False, "refused": err[:-1] if err.endswith("\n") else err, "exit": code}
+
+
+def indented(lines, by="  "):
+    """Lines as the guide prints them: indented, and an empty one left empty."""
+    return "\n".join(by + line if line else "" for line in lines)
+
+
+class JsonSurveyTests(Guided):
+    """`survey`: what `status` and the guide's first two steps show, and nothing written."""
+
+    def survey(self, *argv, gh=True, **fake):
+        self.gh = FakeGh(self.exe, **fake)
+        with mock.patch.object(reporter.subprocess, "run", self.gh), \
+                mock.patch.dict(os.environ, {"PATH": str(self.bin if gh else self.nowhere)}):
+            return run_json("survey", *argv)
+
+    def test_it_is_one_object_holding_what_status_shows_line_for_line(self):
+        code, found, _err = self.survey("--json")
+        self.assertEqual((code, set(found)), (0, SURVEY_KEYS))
+        status, out, _err = run_main("status")
+        self.assertEqual(status, 0)
+        self.assertEqual(found["lines"] + ["", "Write the report with:  python codex_compat_report.py report "
+                                              "--login <your GitHub login>"], out.splitlines())
+        self.assertEqual((found["tool_version"], found["installation"], found["product_version"],
+                          found["engine_version"], found["engine_from_log"], found["blocked"]),
+                         (reporter.__version__, str(self.installation.home), "0.6.9", VERSION, False, None))
+        self.assertEqual(set(found["records"]), RECORDS_KEYS)
+        self.assertEqual(found["records"]["text"], found["lines"][3])
+        self.assertEqual(found["local_checks"], {"lines": 1, "text": found["lines"][-1]})
+        self.assertEqual(found["report_file"], {"path": str(self.file), "exists": False})
+        self.assertEqual(found["gh"], {"path": self.exe, "signed_in": True, "login": LOGIN})
+        self.assertEqual(found["default_login"], LOGIN)
+        self.assertEqual(self.survey()[1], found, "survey answers in JSON with --json or without it")
+
+    def test_the_records_line_comes_in_its_parts_too(self):
+        words = reporter.ENGINE_LOG_WORDS["structurally_compatible"]
+        lines = [engine_line(NOW - 9000, "codex-cli 0.150.0", words),
+                 engine_line(NOW - 7000, "codex-cli 0.150.0", words), engine_line(NOW - 5000, VERSION, words)]
+        rows = [record(), record(detected_at=NOW - 8000, resumed_at=NOW - 7900, outcome_at=NOW - 7800),
+                record(detected_at=NOW - 90000, resumed_at=NOW - 89000, outcome_at=NOW - 88000),
+                record(history_hidden_at=NOW)]
+        with Installation(rows, log_lines=lines):
+            _code, found, _err = self.survey("--json")
+            _code, out, _err = run_main("status")
+        why = "no engine line before it in the logs kept"
+        self.assertEqual(found["records"], {
+            "found": "yes", "total": 3, "on_this_version": 1, "other_versions": 1, "not_placed": 1,
+            "not_placed_why": {why: 1}, "problem": None,
+            "text": "records here   : 3 in all: 1 on this engine version, 1 on other versions, 1 (1: %s) not placed"
+                    % why})
+        self.assertEqual(found["hidden"], 1)
+        self.assertIn(found["records"]["text"] + "\n", out)
+        self.assertEqual(found["lines"], out.splitlines()[:-2])
+
+    def test_gh_as_the_guide_finds_it(self):
+        _code, found, _err = self.survey("--json", gh=False)
+        self.assertEqual((found["gh"], found["default_login"], self.gh.calls),
+                         ({"path": None, "signed_in": False, "login": None}, None, []))
+        _code, found, _err = self.survey("--json", signed_in=False)
+        self.assertEqual((found["gh"], found["default_login"]),
+                         ({"path": self.exe, "signed_in": False, "login": None}, None))
+        _code, found, _err = self.survey("--json", login="somebody-else")
+        self.assertEqual(found["gh"], {"path": self.exe, "signed_in": True, "login": "somebody-else"})
+        self.assertEqual(set(found["gh"]), GH_KEYS)
+        self.assertEqual(self.gh.verbs(), [("auth status",), ("GET", "user")], "only the guide's two questions")
+
+    def test_it_writes_nothing(self):
+        before = self.installation.snapshot()
+        self.file.write_bytes(b"a file already here")
+        code, found, _err = self.survey("--json")
+        self.assertEqual((code, self.gh.writes()), (0, []))
+        self.assertEqual(found["report_file"], {"path": str(self.file), "exists": True})
+        self.assertEqual(self.installation.snapshot(), before)
+        self.assertEqual(list(self.work.iterdir()), [self.file])
+        self.assertEqual(self.file.read_bytes(), b"a file already here")
+
+    def test_what_stops_the_guide_is_said_as_blocked_word_for_word(self):
+        for installation, records in ((Installation(state=False), "none"),
+                                      (Installation([], compat={}, log_lines=[]), "yes"),
+                                      (Installation([record()], user_version=9), "unreadable")):
+            with self.subTest(records), installation:
+                code, found, _err = self.survey("--json")
+                self.assertEqual((code, found["ok"], found["records"]["found"]), (0, True, records))
+                self.assertTrue(found["blocked"])
+                code, said, _gh, asked, _shown = self.guide("", "")
+                self.assertEqual((code, asked), (2, []))
+                self.assertIn(indented(found["lines"]), said)
+                self.assertIn("\n" + found["blocked"] + "\n", said)
+        self.assertIsNone(self.survey("--json")[1]["blocked"])
+
+    def test_a_machine_without_the_product_is_refused_as_status_is(self):
+        with tempfile.TemporaryDirectory() as empty, mock.patch.object(reporter, "PRODUCT", pathlib.Path(empty)):
+            code, found, _err = self.survey("--json")
+            status = run_main("status")
+        self.assertEqual((code, found), (2, refusal(status[0], status[2])))
+        self.assertIn("does not look installed", found["refused"])
+
+
+class JsonReportTests(unittest.TestCase):
+    """`report --json`: the file it wrote, and what the words say about it."""
+
+    def setUp(self):
+        self.stack = contextlib.ExitStack()
+        self.installation = self.stack.enter_context(Installation([record(), record(history_hidden_at=NOW)]))
+        self.work = self.installation.root / "work"
+        self.work.mkdir()
+        self.stack.enter_context(contextlib.chdir(self.work))
+        self.stack.enter_context(mock.patch.object(reporter.time, "time", return_value=NOW + 60))
+
+    def tearDown(self):
+        self.stack.close()
+
+    def test_it_says_what_report_prints_about_the_file_it_wrote(self):
+        target = self.work / "for-the-window.json"
+        code, found, _err = run_json("report", "--login", LOGIN, "--out", str(target), "--json")
+        self.assertEqual((code, set(found)), (0, REPORT_KEYS))
+        written = target.read_bytes()
+        self.assertEqual((found["path"], found["bytes"], found["sha256"]),
+                         (str(target), len(written), hashlib.sha256(written).hexdigest()))
+        self.assertEqual((found["codex_version"], found["verdict"], found["login"], found["records"]),
+                         (VERSION, "PASS", LOGIN, 1))
+        self.assertEqual(found["span"], reporter.time_span(json.loads(written)))
+        self.assertEqual(set(found["left_out"]), LEFT_OUT_KEYS)
+        self.assertEqual((found["left_out"]["hidden"], found["left_out"]["other_versions"],
+                          found["left_out"]["not_placed"], found["left_out"]["not_placed_why"]), (1, 0, 0, {}))
+        code, out, _err = run_main("report", "--login", LOGIN, "--out", str(self.work / "in-words.json"))
+        self.assertEqual(code, 0)
+        self.assertEqual((self.work / "in-words.json").read_bytes(), written, "one clock, one report")
+        self.assertIn("\n" + indented(found["lines"]) + "\n\n", out)
+        self.assertIn("  left out   : %s\n" % found["left_out"]["text"], out)
+        self.assertEqual(found["lines"][-1], "SHA-256    : %s" % found["sha256"])
+
+    def test_without_out_it_writes_where_report_does(self):
+        code, found, _err = run_json("report", "--login", LOGIN, "--json")
+        self.assertEqual(code, 0)
+        self.assertEqual(found["path"], str(self.work / "codex-cli-0.155.0-alpha.9.2.json"))
+        self.assertTrue(pathlib.Path(found["path"]).is_file())
+
+    def test_its_refusals_are_the_consoles_word_for_word(self):
+        target = self.work / "already.json"
+        target.write_bytes(b"the file I read")
+        for argv in (("--login", LOGIN, "--out", str(target)), ("--login", "nul", "--out", str(target)),
+                     ("--login", LOGIN, "--out", str(self.work / "nope" / "r.json"))):
+            with self.subTest(argv[1]):
+                code, found, _err = run_json("report", *argv, "--json")
+                self.assertEqual(found, refusal(*run_main("report", *argv)[::2]))
+                self.assertEqual(code, 2)
+                self.assertEqual(target.read_bytes(), b"the file I read")
+        code, found, _err = run_json("report", "--login", LOGIN, "--out", str(target), "--force", "--json")
+        self.assertEqual((code, found["ok"]), (0, True))
+        self.assertEqual(hashlib.sha256(target.read_bytes()).hexdigest(), found["sha256"])
+
+    def test_a_usage_error_is_one_object_and_writes_nothing(self):
+        code, found, err = run_json("report", "--login", LOGIN, "--codex-version", "latest", "--json")
+        self.assertEqual((code, set(found), found["exit"]), (2, REFUSAL_KEYS, 2))
+        self.assertIn("is not a Codex version", found["refused"])
+        self.assertIn("usage:", err)
+        self.assertEqual(list(self.work.iterdir()), [])
+
+
+class JsonSubmitTests(Sending):
+    """`submit --json`: the plan the dry run prints, the pull request --yes opens, and the same refusals."""
+
+    def submit_json(self, *argv, **fake):
+        gh = FakeGh(self.exe, **fake)
+        with mock.patch.object(reporter.subprocess, "run", gh):
+            code, found, err = run_json("submit", *argv, "--json")
+        return gh, code, found, err
+
+    def digest(self):
+        return hashlib.sha256(self.reviewed).hexdigest()
+
+    def test_the_dry_run_is_the_plan_in_fields_and_in_the_lines_the_console_prints(self):
+        gh, code, found, _err = self.submit_json(str(self.file), "--sha256", self.digest(), "--dry-run")
+        self.assertEqual((code, set(found), gh.writes()), (0, SUBMIT_KEYS, []))
+        path, branch = reporter.destination(VERSION, LOGIN)
+        self.assertEqual({key: found[key] for key in ("file", "bytes", "sha256", "codex_version", "verdict", "records",
+                                                      "login", "repository", "target", "branch", "fork", "fork_exists",
+                                                      "branch_exists", "gh", "url", "written", "after")},
+                         {"file": str(self.file), "bytes": len(self.reviewed), "sha256": self.digest(),
+                          "codex_version": VERSION, "verdict": "PASS", "records": 1, "login": LOGIN, "repository": REPO,
+                          "target": path, "branch": branch, "fork": FORK, "fork_exists": False, "branch_exists": False,
+                          "gh": self.exe, "url": None, "written": [], "after": None})
+        _gh, code, out, _err = self.submit(str(self.file), "--sha256", self.digest(), "--dry-run")
+        self.assertEqual((code, found["lines"]), (0, out.splitlines()))
+        self.assertEqual(["  - " + write for write in found["writes"]],
+                         [line for line in out.splitlines() if line.startswith("  - ")])
+        _gh, _code, found, _err = self.submit_json(str(self.file), "--dry-run", fork=True, branch=True)
+        self.assertEqual((found["fork_exists"], found["branch_exists"]), (True, True))
+        self.assertIn("the branch %s on it, reset to the project's main" % branch, found["writes"])
+
+    def test_yes_opens_the_pull_request_with_the_pinned_bytes_and_says_so(self):
+        gh, code, found, _err = self.submit_json(str(self.file), "--sha256", self.digest(), "--yes")
+        self.assertEqual((code, set(found)), (0, SUBMIT_KEYS))
+        path, branch = reporter.destination(VERSION, LOGIN)
+        self.assertEqual(found["url"], "https://github.com/%s/pull/7" % REPO)
+        self.assertEqual(found["written"],
+                         ["the fork " + FORK, "the branch " + branch, "the file %s on that branch" % path])
+        self.assertEqual(found["after"], reporter.AFTER_SUBMIT)
+        self.assertEqual(found["lines"][-2:], ["opened: " + found["url"], reporter.AFTER_SUBMIT])
+        self.assertEqual(self.uploaded(gh), self.reviewed)
+        _gh, code, out, _err = self.submit(str(self.file), "--sha256", self.digest(), "--yes")
+        self.assertEqual((code, found["lines"]), (0, out.splitlines()))
+
+    def test_the_sha256_still_pins_the_bytes(self):
+        digest = self.digest()
+        self.file.write_bytes(self.reviewed.replace(b'"verdict": "PASS"', b'"verdict": "NONE"'))
+        for pinned in (digest, "0" * 64):
+            with self.subTest(pinned[:4]):
+                gh, code, found, _err = self.submit_json(str(self.file), "--sha256", pinned, "--yes")
+                self.assertEqual((code, gh.calls), (2, []))
+                self.assertEqual(found, refusal(*self.submit(str(self.file), "--sha256", pinned, "--yes")[1::2]))
+                self.assertIn("has changed: its SHA-256 is", found["refused"])
+
+    def test_a_refusal_after_writes_carries_what_was_written_as_the_console_lists_it(self):
+        failing = {("pr create",): (1, "", "gh: Validation Failed (HTTP 422)")}
+        gh, code, found, _err = self.submit_json(str(self.file), "--yes", answers=failing)
+        path, branch = reporter.destination(VERSION, LOGIN)
+        self.assertEqual((code, set(found)), (2, REFUSAL_KEYS | {"written"}))
+        self.assertEqual(found["written"],
+                         ["the fork " + FORK, "the branch " + branch, "the file %s on that branch" % path])
+        _gh, code, _out, err = self.submit(str(self.file), "--yes", answers=failing)
+        self.assertEqual(dict(found, written=None), dict(refusal(code, err), written=None))
+        self.assertIn("Already written to GitHub by this run: %s." % "; ".join(found["written"]), found["refused"])
+        for fake in ({"filed": True}, {"login": "somebody-else"}):
+            with self.subTest(fake):
+                _gh, code, found, _err = self.submit_json(str(self.file), "--yes", **fake)
+                self.assertEqual((code, set(found)), (2, REFUSAL_KEYS), "no written list when nothing was written")
+                self.assertEqual(found, refusal(*self.submit(str(self.file), "--yes", **fake)[1::2]))
+
+    def test_a_closed_door_is_exit_code_3_with_the_consoles_two_lines(self):
+        gh, code, found, _err = self.submit_json(str(self.file), "--yes", door=False)
+        self.assertEqual((code, found, gh.writes()),
+                         (3, {"ok": False, "refused": "\n".join(reporter.NOT_OPEN), "exit": 3}, []))
+        _gh, code, out, _err = self.submit(str(self.file), "--yes", door=False)
+        self.assertEqual(code, 3)
+        self.assertTrue(out.endswith("\n".join(reporter.NOT_OPEN) + "\n"))
+
+    def test_neither_yes_nor_dry_run_is_refused_as_the_console_refuses_it(self):
+        gh, code, found, _err = self.submit_json(str(self.file))
+        self.assertEqual((code, gh.writes()), (2, []))
+        self.assertEqual(found, refusal(*self.submit(str(self.file))[1::2]))
+        self.assertIn("Add --yes", found["refused"])
+
+
+class JsonWebStepsTests(Guided):
+    """`web-steps`: the guide's way of sending on the web, for a file, with the values to type."""
+
+    def web_steps(self, *argv, gh=True, **fake):
+        self.gh = FakeGh(self.exe, **fake)
+        with mock.patch.object(reporter.subprocess, "run", self.gh), \
+                mock.patch.dict(os.environ, {"PATH": str(self.bin if gh else self.nowhere)}):
+            return run_json("web-steps", str(self.file), *argv, "--json")
+
+    def write(self, login=LOGIN):
+        self.file.write_bytes(reporter.make_report(login)[1])
+        return self.file.read_bytes()
+
+    def test_they_are_the_guides_words_with_the_values_apart(self):
+        _code, said, _gh, _asked, _shown = self.guide("someone", "n", gh=False)
+        raw = self.file.read_bytes()
+        code, found, _err = self.web_steps(gh=False)
+        self.assertEqual((code, set(found), self.gh.calls), (0, WEB_KEYS, []))
+        path, branch = reporter.destination(VERSION, LOGIN)
+        self.assertEqual((found["file"], found["bytes"], found["sha256"], found["login"], found["codex_version"],
+                          found["target"], found["branch"], found["project_page"]),
+                         (str(self.file), len(raw), hashlib.sha256(raw).hexdigest(), LOGIN, VERSION, path, branch,
+                          "https://github.com/" + REPO))
+        self.assertEqual(found["gh"], {"path": None, "signed_in": False, "login": None})
+        self.assertEqual(found["why"],
+                         ["gh, the GitHub CLI, is not installed here, so this cannot send the report for you."])
+        self.assertEqual([step["copy"] for step in found["steps"]], [None, branch, path, None])
+        self.assertEqual([set(step) for step in found["steps"]], [{"text", "copy", "notes"}] * 4)
+        self.assertIn("\n" + indented(found["lines"]) + "\n", said)
+        with mock.patch.dict(os.environ, {"PATH": str(self.nowhere)}):
+            code, out, _err = run_main("web-steps", str(self.file))
+        self.assertEqual((code, out), (0, "\n".join(found["lines"]) + "\n"))
+
+    def test_why_says_what_gh_is_here(self):
+        self.write()
+        for fake, why in (({"signed_in": False}, ["gh, the GitHub CLI, is not signed in to github.com here, so this "
+                                                   "cannot send the report."]),
+                          ({"login": "somebody-else"}, ["gh, the GitHub CLI, is signed in here as somebody-else, not "
+                                                        "someone, so this cannot send the report."])):
+            with self.subTest(fake):
+                code, found, _err = self.web_steps(**fake)
+                self.assertEqual(code, 0)
+                self.assertEqual(found["why"], why + ["Sign it in as someone (gh auth login --hostname github.com) and "
+                                                      "run this again to send from here."])
+                self.assertEqual(self.gh.writes(), [])
+        code, found, _err = self.web_steps()
+        self.assertEqual((code, found["why"], found["gh"]["login"]), (0, [], LOGIN), "gh could send it from here")
+
+    def test_a_file_the_project_would_refuse_is_refused_with_the_guides_sentence(self):
+        def spoil():
+            self.file.write_bytes(b'{"edited": true}')
+            return ""
+        _code, said, _gh, _asked, _shown = self.guide("", "", spoil)
+        code, found, _err = self.web_steps()
+        self.assertEqual((code, set(found)), (2, REFUSAL_KEYS))
+        self.assertTrue(found["refused"].startswith("%s is not a report the project would accept, so it cannot be "
+                                                    "sent:\n  - keys:" % self.file))
+        self.assertIn(found["refused"] + "\n", said)
+        self.file.unlink()
+        code, found, _err = self.web_steps()
+        with mock.patch.dict(os.environ, {"PATH": str(self.nowhere)}):
+            self.assertEqual(found, refusal(*run_main("web-steps", str(self.file))[::2]))
+        self.assertIn("could not be read", found["refused"])
+
+    def test_login_holds_the_file_to_a_login_as_submit_login_does(self):
+        self.write()
+        code, found, _err = self.web_steps("--login", LOGIN)
+        self.assertEqual((code, found["login"]), (0, LOGIN))
+        code, found, _err = self.web_steps("--login", "other")
+        self.assertEqual((code, found, self.gh.calls), (2, {"ok": False, "refused": "The file is filed under %s, not "
+                                                                                   "other." % LOGIN, "exit": 2}, []))
+        with mock.patch.object(reporter.subprocess, "run", FakeGh(self.exe)):
+            self.assertEqual(found["refused"] + "\n", run_main("submit", str(self.file), "--login", "other",
+                                                               "--dry-run")[2])
+
+    def test_a_login_github_spells_otherwise_is_refused_with_the_guides_sentence(self):
+        self.write("Someone")
+        code, found, _err = self.web_steps()
+        self.assertEqual((code, set(found), self.gh.writes()), (2, REFUSAL_KEYS, []))
+        self.file.unlink()
+
+        def sign_in():
+            self.gh.signed_in = True
+            return "n"
+        _code, said, _gh, _asked, _shown = self.guide("Someone", sign_in, signed_in=False)
+        self.assertIn(found["refused"] + "\n", said)
+        self.assertIn("GitHub spells that login someone", found["refused"])
+
+
+class OneSourceTests(Guided):
+    """The words and the JSON come from one function each: change what it says, and both say it."""
+
+    def wrapped(self, name, change):
+        real = getattr(reporter, name)
+
+        def patched(*args, **kwargs):
+            found = real(*args, **kwargs)
+            change(found)
+            return found
+        return mock.patch.object(reporter, name, patched)
+
+    def everywhere(self, *argv, gh=True):
+        fake = FakeGh(self.exe)
+        with mock.patch.object(reporter.subprocess, "run", fake), \
+                mock.patch.dict(os.environ, {"PATH": str(self.bin if gh else self.nowhere)}):
+            return run_main(*argv)
+
+    def test_what_this_machine_shows(self):
+        with self.wrapped("machine", lambda found: found["lines"].append("a line from machine()")):
+            self.assertIn("\na line from machine()\n", self.everywhere("status")[1])
+            self.assertIn("a line from machine()", json.loads(self.everywhere("survey", "--json")[1])["lines"])
+            self.assertIn("\n  a line from machine()\n", self.guide()[1])
+        with self.wrapped("machine", lambda found: found.update(blocked="a refusal from machine()")):
+            self.assertEqual(json.loads(self.everywhere("survey")[1])["blocked"], "a refusal from machine()")
+            code, said, _gh, asked, _shown = self.guide("", "")
+            self.assertEqual((code, asked), (2, []))
+            self.assertIn("\na refusal from machine()\n", said)
+
+    def test_what_a_report_holds(self):
+        with self.wrapped("facts", lambda found: found["lines"].append("a line from facts()")):
+            self.assertIn("\n  a line from facts()\n",
+                          self.everywhere("report", "--login", LOGIN, "--out", "a.json")[1])
+            self.assertIn("a line from facts()", json.loads(self.everywhere(
+                "report", "--login", LOGIN, "--out", "b.json", "--json")[1])["lines"])
+            self.assertIn("\n    a line from facts()\n", self.guide("someone", "n", gh=False)[1])
+
+    def test_how_to_send_on_the_web(self):
+        with self.wrapped("web_route", lambda found: found["lines"].append("a line from web_route()")):
+            self.assertIn("\n  a line from web_route()\n", self.guide("someone", "n", gh=False)[1])
+            self.assertIn("a line from web_route()", json.loads(self.everywhere(
+                "web-steps", str(self.file), "--json", gh=False)[1])["lines"])
+            self.assertIn("\na line from web_route()\n", self.everywhere("web-steps", str(self.file), gh=False)[1])
+
+    def test_what_submit_says(self):
+        real = reporter.prepare_submit
+
+        def patched(path, **kwargs):
+            kwargs["say"]("a line from prepare_submit()")
+            return real(path, **kwargs)
+        self.file.write_bytes(reporter.make_report(LOGIN)[1])
+        with mock.patch.object(reporter, "prepare_submit", patched):
+            self.assertTrue(self.everywhere("submit", str(self.file), "--dry-run")[1].startswith(
+                "a line from prepare_submit()\nfile        : "))
+            self.assertIn("a line from prepare_submit()", json.loads(self.everywhere(
+                "submit", str(self.file), "--dry-run", "--json")[1])["lines"])
+            self.file.unlink()
+            self.assertIn("\n  a line from prepare_submit()\n", self.guide("", "", "", "")[1])
+
+
+class JsonPlumbingTests(unittest.TestCase):
+    """Whatever happens, a window hears one JSON object on stdout, and the exit code the console has."""
+
+    def test_a_command_line_mistake_is_one_object_with_exit_code_2(self):
+        for argv, said in ((("status", "--json"), "unrecognized arguments: --json"),
+                           (("report", "--json"), "the following arguments are required: --login"),
+                           (("web-steps", "--json"), "the following arguments are required: FILE"),
+                           (("submit", "--yes", "--dry-run", "--json"), "not allowed with argument")):
+            with self.subTest(argv):
+                code, found, err = run_json(*argv)
+                self.assertEqual((code, set(found), found["exit"]), (2, REFUSAL_KEYS, 2))
+                self.assertIn(said, found["refused"])
+                self.assertIn("usage:", err)
+
+    def test_a_bug_is_exit_code_1_with_its_traceback_on_stderr(self):
+        with Installation([record()]), mock.patch.object(reporter, "machine", side_effect=ValueError("a bug")):
+            code, found, err = run_json("survey")
+        self.assertEqual((code, set(found), found["exit"]), (1, REFUSAL_KEYS, 1))
+        self.assertIn("ValueError: a bug", found["refused"])
+        self.assertIn("Traceback", err)
+
+    def test_anything_else_printed_goes_to_stderr(self):
+        real = reporter.machine
+
+        def chatty():
+            print("something printed on the way")
+            return real()
+        with Installation([record()]), mock.patch.object(reporter, "machine", chatty), \
+                mock.patch.object(reporter, "signed_in", return_value=(None, None)):
+            code, found, err = run_json("survey")
+        self.assertEqual((code, found["ok"]), (0, True))
+        self.assertIn("something printed on the way", err)
+
+    def test_help_is_still_words(self):
+        code, out, _err = run_main("survey", "--help")
+        self.assertEqual(code, 0)
+        self.assertIn("usage: codex_compat_report survey", out)
 
 
 class ReadOnlyTests(unittest.TestCase):
