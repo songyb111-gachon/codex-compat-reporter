@@ -898,6 +898,15 @@ class SubmitTests(unittest.TestCase):
         gh, code, _out, err = self.submit(str(self.file), "--yes", open_prs=[code_change])
         self.assertEqual(code, 0, err)
 
+    def test_this_reports_own_open_pull_request_is_closed_first_and_the_refusal_says_so(self):
+        """The project's comment on a refused report says to close it, then submit again; submit says
+        the same, and writes nothing while it is open."""
+        own = ("https://github.com/%s/pull/7" % REPO, "compat-report/codex-cli-0.155.0-alpha.9.2")
+        gh, code, _out, err = self.submit(str(self.file), "--yes", fork=True, branch=True, open_prs=[own])
+        self.assertEqual(code, 2)
+        self.assertIn("Your pull request for this report is still open: %s. Close it on GitHub first" % own[0], err)
+        self.assertEqual(gh.writes(), [])
+
     def test_a_left_over_branch_is_reset_to_main_rather_than_reused(self):
         gh, code, out, err = self.submit(str(self.file), "--yes", fork=True, branch=True)
         self.assertEqual(code, 0, err)

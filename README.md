@@ -156,7 +156,7 @@ main and adds the file again.
 The name in the project is always `codex-cli-<version>.json` under your login, whatever you called
 the file on your machine. There is one report per GitHub login per Codex version, and one open
 report pull request per account at a time: `submit` refuses when yours is already filed, or when a
-report pull request of yours is still open. The login may not be a name Windows keeps for a device
+report pull request of yours is still open - close that one on GitHub first to send again. The login may not be a name Windows keeps for a device
 (`con`, `nul`, `com1` and the rest), since no Windows checkout of the project could hold that
 folder, and the Codex version is written the one way the product writes it (`0.155.0`, never
 `00.155.0`).
@@ -188,9 +188,10 @@ is nothing for you to do:
 - the project's own tests failing, or filing paused by the maintainer.
 
 A refused pull request's comment says, line by line, what to do about each reason - most often to
-write the report again with the latest reporter and run `submit --yes` again. A new commit on the
-pull request is judged again; one refused and left unchanged for 14 days is closed. A new report is
-welcome any time.
+close that pull request, write the report again with the latest reporter and run `submit --yes`
+again. Closing it comes first because `submit` sends nothing while a report pull request of yours is
+open. A new commit on the pull request is judged again; one refused and left unchanged for 14 days
+is closed. A new report is welcome any time.
 
 ## What a report can and cannot do
 
