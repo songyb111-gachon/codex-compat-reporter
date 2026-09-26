@@ -717,6 +717,14 @@ def check_login(login: str) -> str:
     return login
 
 
+def github_spelling(login: str, who) -> str | None:
+    """gh's spelling of the login, when `who` is the same GitHub account typed in another letter case.
+    GitHub takes a login in any case, but the project files a report under the pull request's author
+    exactly as GitHub spells it (build/community_check.py, FOLDER): a folder in any other case is
+    refused there, so a report filed under it could never be taken."""
+    return who if who and who != login and who.casefold() == login.casefold() else None
+
+
 def _unplaced_text(notes: dict) -> str:
     unplaced = notes.get("unplaced") or {}
     if not unplaced:
@@ -1003,6 +1011,10 @@ def prepare_submit(path, *, login=None, sha256=None, say=print):
                       "and try again.")
     who = github.must(github.api("GET", "user", "--jq", ".login"), "the question of who is signed in")
     say("gh          : %s, host %s, signed in as %s" % (github.exe, HOST, who))
+    if github_spelling(login, who):
+        raise Refused("%s is filed under %s, but GitHub spells that login %s, and the project takes a report "
+                      "only under the login exactly as GitHub spells it. Write it again with `report --login %s "
+                      "--force`, read it, and send that." % (path, login, who, who))
     if who != login:
         raise Refused("gh is signed in as %s, so a report filed under %s cannot be sent from here."
                       % (who, login))
@@ -1276,6 +1288,10 @@ class Guide:
 
         self.step(5, "send it, or not")
         github, who = signed_in()
+        if github_spelling(login, who):             # gh was signed in only after step 2
+            raise Refused("%s is filed under %s, but GitHub spells that login %s, and the project takes a "
+                          "report only under the login exactly as GitHub spells it. Run this again, take %s "
+                          "at the login, and write a new one over this file." % (target, login, who, who))
         if who != login:
             return self.on_the_web(report, login, github, who)
         indented = lambda text="": print("  " + text if text else "")   # noqa: E731
@@ -1310,6 +1326,10 @@ class Guide:
                 print("  That is not a GitHub login: up to 39 letters, digits and single hyphens, with no "
                       "hyphen first or last.")
                 continue
+            if github_spelling(answer, offered):
+                print("  GitHub spells that login %s, and the report is filed under it as GitHub spells it."
+                      % offered)
+                answer = offered
             try:
                 return check_login(answer)
             except Refused as refused:                  # a name Windows keeps for a device
