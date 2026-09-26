@@ -15,11 +15,45 @@ JSON 파일 하나로 만들어 프로젝트에 보내는 작은 윈도우 도�
 1. [최신 릴리스](https://github.com/songyb111-gachon/codex-compat-reporter/releases/latest)에서
    `codex-compat-reporter-<버전>.zip`을 받아 압축을 풉니다. 파일을 마우스 오른쪽 단추로 누르고
    **모두 압축 풀기**를 고르세요.
-2. 풀린 폴더의 `Report.cmd`를 두 번 누릅니다. Codex Auto Resume이 함께 설치한 파이썬으로 돌아가므로
+2. 풀린 폴더의 `Report.exe`를 두 번 누릅니다. Codex Auto Resume이 함께 설치한 파이썬으로 보고 도구를
+   돌리므로 더 설치할 것은 없습니다.
+
+   처음에는 Windows가 **Windows의 PC 보호** 창을 띄울 수 있습니다. 인터넷에서 받은 프로그램인데 서명이
+   없어서입니다. **추가 정보**를 누른 뒤 **실행**을 고르세요. 이 파일이 어디서 왔는지는 릴리스가
+   증명합니다. `gh attestation verify <그 ZIP> --repo songyb111-gachon/codex-compat-reporter`를 실행하면
+   그 ZIP이 이 저장소의 워크플로가 GitHub에서 릴리스 태그로 만든 것임이 확인되고, 어느 실행과 커밋이
+   만들었는지도 나옵니다([받기](#받기) 참고).
+3. **Next**를 눌러 다섯 쪽을 차례로 넘깁니다. 이 PC가 보여 줄 수 있는 것을 보여 주고, GitHub CLI가
+   로그인한 깃허브 아이디를 채워 두고, 보고서를 쓴 뒤 파일 전체를 보여 줍니다. 읽어 보세요. 짧습니다.
+4. 보내려면 **I have read it**(읽었음)에 표시하고 **Send**를 누릅니다. 한 번 더 묻는데, 기본 답은
+   취소(Cancel)입니다. 그 밖의 어떤 선택도 아무것도 보내지 않고, 파일은 쓴 자리에 그대로 남습니다.
+   GitHub CLI가 로그인되어 있지 않으면, 마지막 쪽이 웹에서 파일을 보내는 방법을 단계별로 알려 주고,
+   입력할 값마다 옆에 **Copy**(복사) 단추를 둡니다.
+
+![창의 1단계: 이 PC가 보여 줄 수 있는 것 - 설치 폴더, 제품과 Codex 버전, 기록 수, 자체 점검](docs/images/window-1.png)
+
+![2단계: gh가 로그인한 아이디로 채워 둔 깃허브 아이디](docs/images/window-2.png)
+
+![3단계: 이 PC의 기록으로 쓴 보고서의 요약과 SHA-256](docs/images/window-3.png)
+
+![4단계: 보고서 전체와 전체 경로, 메모장으로 열기 단추, 보여 준 내용의 SHA-256](docs/images/window-4.png)
+
+![5단계: 보내면 GitHub에 무엇을 쓰는지 보내기 전에 보여 주고, 읽었음에 표시한 뒤의 Send 단추](docs/images/window-5.png)
+
+그림은 창이 가상의 PC에서 각 쪽을 직접 그린 것입니다. 아래 안내 그림과 같은 PC로, 아이디는
+ExampleUser이고 기록은 누구의 것도 아닙니다. [tools/make_window_pictures.py](tools/make_window_pictures.py)가
+만들며, 그림을 만들면서 보낸 것은 없습니다. 창의 문구는 영어입니다.
+
+## Report.cmd: 콘솔 창에서 같은 안내
+
+`Report.exe` 옆의 `Report.cmd`는 같은 안내를 콘솔 창에서 합니다. 같은 단계를 같은 말로, 한 번에 한
+질문씩 묻습니다. 창을 누르며 넘기기보다 콘솔에서 답하는 편이 좋다면 이쪽을 쓰세요.
+
+1. 풀린 폴더의 `Report.cmd`를 두 번 누릅니다. Codex Auto Resume이 함께 설치한 파이썬으로 돌아가므로
    더 설치할 것은 없습니다.
-3. 묻는 말에 답합니다. 이 PC가 보여 줄 수 있는 것을 보여 주고, 깃허브 아이디를 묻고, 보고서를 쓴 뒤
+2. 묻는 말에 답합니다. 이 PC가 보여 줄 수 있는 것을 보여 주고, 깃허브 아이디를 묻고, 보고서를 쓴 뒤
    메모장으로 엽니다. 읽어 보세요. 짧습니다.
-4. `send`를 입력하면 보냅니다. 그 밖의 어떤 답도 아무것도 보내지 않고, 파일은 쓴 자리에 그대로 남습니다.
+3. `send`를 입력하면 보냅니다. 그 밖의 어떤 답도 아무것도 보내지 않고, 파일은 쓴 자리에 그대로 남습니다.
    GitHub CLI가 로그인되어 있지 않으면, 웹에서 파일을 보내는 방법을 단계별로 알려 줍니다.
 
 ![안내의 1·2단계: 이 PC가 보여 줄 수 있는 것, 그리고 gh가 로그인한 깃허브 아이디를 제안](docs/images/guide-1-start.png)
@@ -35,10 +69,19 @@ JSON 파일 하나로 만들어 프로젝트에 보내는 작은 윈도우 도�
 
 ## 받기
 
-빠른 시작의 릴리스 ZIP에는 이 파일과 함께, 아래의 `guide`를 실행하는 `Report.cmd`가 들어 있습니다.
-릴리스마다 GitHub Actions가 태그에서 만들고, ZIP 옆에 SHA-256과 빌드 증명(attestation)을 둡니다.
-`gh attestation verify <그 ZIP> --repo songyb111-gachon/codex-compat-reporter`가 어느 워크플로 실행과
-커밋이 만들었는지 알려 줍니다.
+빠른 시작의 릴리스 ZIP에는 이 파일과 함께, 창인 `Report.exe`와 아래의 `guide`를 실행하는
+`Report.cmd`가 들어 있습니다. 릴리스마다 GitHub Actions가 태그에서 만들고, ZIP 옆에 SHA-256과 빌드
+증명(attestation)을 둡니다. `gh attestation verify <그 ZIP> --repo songyb111-gachon/codex-compat-reporter`가
+어느 워크플로 실행과 커밋이 만들었는지 알려 줍니다. `Report.exe`도 그 실행 안에서
+[tools/make_exe.py](tools/make_exe.py)가 [gui/](gui/)로부터 컴파일합니다. 모든 Windows에 들어 있는
+.NET Framework 4.8의 C# 컴파일러를 쓰며, 같은 소스와 같은 컴파일러는 같은 바이트를 내므로 태그에서 다시
+만들어 비교할 수 있습니다.
+
+`Report.exe`는 스스로 아무것도 정하지 않습니다. 옆에 있는 `codex_compat_report.py`를 `Report.cmd`가
+쓸 파이썬으로, 격리 모드에 콘솔 창 없이 실행하고, 이 파일이 `--json`으로 답한 것 - `survey`, `login`,
+`report --keep --json`, `submit --json`, `web-steps --json`이 각각 JSON 객체 하나로 - 을 보여 줄
+뿐입니다. 창과 안내는 같은 함수가 만든 같은 문장을 말하고, 보고서와 보내기의 모든 바이트는 이 파일의
+것입니다.
 
 표준 라이브러리만 쓰는 파이썬 파일 하나이고, 설치할 것은 없습니다. 저장소를 받아 그 폴더에서
 실행하거나,
@@ -54,10 +97,11 @@ cd codex-compat-reporter
 필요한 것:
 
 - 윈도우, 그리고 Python 3.11 이상. CI는 Python 3.11, 3.12, 3.13, 3.14에서 테스트를 돌립니다.
-  `Report.cmd`는 따로 설치한 파이썬이 필요 없습니다. Codex Auto Resume이 설치한 파이썬, 파이썬 런처,
-  `PATH`에 있는 폴더의 `python.exe` 순서로 찾으며, 모두 전체 경로로 부릅니다. 지금 폴더나
-  `Report.cmd` 옆의 것은 `PATH`가 그 폴더를 어떻게 적었든 절대 쓰지 않습니다. 파이썬은 격리
+  `Report.exe`와 `Report.cmd`는 따로 설치한 파이썬이 필요 없습니다. Codex Auto Resume이 설치한 파이썬,
+  파이썬 런처, `PATH`에 있는 폴더의 `python.exe` 순서로 찾으며, 모두 전체 경로로 부릅니다. 지금 폴더나
+  두 파일 옆의 것은 `PATH`가 그 폴더를 어떻게 적었든 절대 쓰지 않습니다. 파이썬은 격리
   모드(`-I`)로 실행하므로, 두 폴더 어디에서도 모듈을 가져오지 않습니다.
+- `Report.exe`에는 .NET Framework 4.8. Windows 10과 11에는 모두 들어 있습니다.
 - 설치된 Codex Auto Resume v0.6.0 이상. 감시기가 한 번 이상 돌았어야 합니다.
 - `submit`에만: [GitHub CLI](https://cli.github.com/)가 `gh auth login --hostname github.com`으로
   로그인되어 있어야 합니다.
@@ -134,7 +178,8 @@ python codex_compat_report.py submit <그 파일> --yes              # PR 열기
 폴더에 두었다가 보내는 즉시 지웁니다. WAL 모드인 SQLite 데이터베이스를 읽으면 SQLite가 공유 메모리
 색인(`-shm` 파일)을 갱신할 수 있습니다. 제품 자체의 읽기도 마찬가지이고, 데이터베이스 자체에는
 아무것도 쓰지 않습니다. `guide`는 보고서를 메모장으로, 프로젝트 페이지를 브라우저로 여는데, 둘 다 '예'라고 할 때만
-엽니다.
+엽니다. `Report.exe`는 **Open in Notepad**를 누를 때만 메모장을 열고, 프로젝트 페이지나 - 보낸 뒤에는 -
+그 프로젝트에 연 내 PR을 누를 때만 브라우저를 엽니다. 여는 주소는 그 둘뿐입니다.
 
 ## 보고서에 담기는 것, 공개되는 것
 
@@ -184,7 +229,9 @@ GitHub가 새 포크를 복사하는 데는 잠시 걸리므로, `submit`은 브
 `guide`는 아이디를 물을 때 앞의 두 질문 - `gh`가 로그인되어 있는지, 누구로 되어 있는지 - 을 해서 `gh`의
 아이디를 제안합니다. `send`를 입력하면 모든 질문을 다시 하고, 물어볼 때의 파일 SHA-256을 고정한 채
 `submit --yes`와 똑같이 씁니다. 그 뒤에 바뀐 파일이나, 보여 준 것과 달라진 쓰기 목록은 거절하며 아무것도
-보내지 않습니다.
+보내지 않습니다. `Report.exe`도 아이디를 채울 때 같은 두 질문을 하고, 마지막 쪽의 쓰기 목록은 `--dry-run`으로
+받아 보여 줍니다. **Send**를 누르면 - 읽었음에 표시하고, 기본 답이 취소인 질문에 한 번 더 답한 뒤 - 창이
+보여 준 바이트의 SHA-256을 고정한 채 `submit --yes`를 실행합니다.
 
 프로젝트 안의 이름은 내 PC에서 파일을 무엇이라 불렀든 언제나 내 아이디 아래의
 `codex-cli-<버전>.json`입니다. 보고서는 깃허브 아이디 하나당 Codex 버전 하나에 하나이고, 열린 보고서 PR은

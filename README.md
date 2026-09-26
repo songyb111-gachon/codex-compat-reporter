@@ -15,11 +15,47 @@ can say something too.
 1. Download `codex-compat-reporter-<version>.zip` from
    [the latest release](https://github.com/songyb111-gachon/codex-compat-reporter/releases/latest)
    and unzip it: right-click it and choose Extract All.
-2. Double-click `Report.cmd` in the folder that makes. It runs on the Python that Codex Auto Resume
+2. Double-click `Report.exe` in the folder that makes. It runs the reporter on the Python that Codex
+   Auto Resume installed with itself, so there is nothing more to install.
+
+   Windows may first say **Windows protected your PC**: Report.exe is a program downloaded from the
+   internet, and it is not signed. Choose **More info**, then **Run anyway**. What says where it came
+   from is the release itself: `gh attestation verify <the ZIP> --repo songyb111-gachon/codex-compat-reporter`
+   proves the ZIP was built from the release's tag by this repository's workflow on GitHub, and names
+   the run and the commit (see [Get it](#get-it)).
+3. Go through its five pages with **Next**. It shows what this machine can show, fills in the GitHub
+   login the GitHub CLI is signed in as, writes the report and shows the whole file. Read it: it is
+   short.
+4. To send it, tick **I have read it** and choose **Send**. One more question follows, and its default
+   answer is Cancel. Anything else sends nothing, and the file stays where it was written. Without the
+   GitHub CLI signed in, the last page says step by step how to send the file on the web instead, with
+   a **Copy** button beside each value to type.
+
+![Step 1 of the window: what this machine can show - the installation, the product and Codex versions, its records and the local checks](docs/images/window-1.png)
+
+![Step 2: the GitHub login, filled in with the one gh is signed in as](docs/images/window-2.png)
+
+![Step 3: the report written from this machine's records, with its summary and SHA-256](docs/images/window-3.png)
+
+![Step 4: the whole report shown, with its full path, Open in Notepad, and the SHA-256 of what is shown](docs/images/window-4.png)
+
+![Step 5: what sending writes to GitHub, listed before anything is sent, with I have read it ticked and Send](docs/images/window-5.png)
+
+The pictures are the window's own drawing of each page on a made-up machine - the one the guide's
+pictures below show: the login ExampleUser, and records that belong to no one - made by
+[tools/make_window_pictures.py](tools/make_window_pictures.py). Nothing was sent to make them.
+
+## Report.cmd: the same guide in a console window
+
+`Report.cmd`, beside `Report.exe` in the same folder, is the same guide in a console window: the same
+steps in the same words, one question at a time, for anyone who would rather answer in a console than
+click through a window.
+
+1. Double-click `Report.cmd` in the folder that makes. It runs on the Python that Codex Auto Resume
    installed with itself, so there is nothing more to install.
-3. Answer its questions. It shows what this machine can show, asks for your GitHub login, writes the
+2. Answer its questions. It shows what this machine can show, asks for your GitHub login, writes the
    report and opens it in Notepad. Read it: it is short.
-4. Type `send` to send it. Anything else sends nothing, and the file stays where it was written.
+3. Type `send` to send it. Anything else sends nothing, and the file stays where it was written.
    Without the GitHub CLI signed in, it says step by step how to send the file on the web instead.
 
 ![Step 1 and 2 of the guide: what this machine can show, and the GitHub login gh is signed in as, offered](docs/images/guide-1-start.png)
@@ -35,10 +71,19 @@ belong to no one - made by [tools/make_pictures.py](tools/make_pictures.py).
 
 ## Get it
 
-The release ZIP in the quick start above holds this file with `Report.cmd`, which runs `guide`, below.
-Each release is built from its tag by GitHub Actions, with the ZIP's SHA-256 beside it and a build
-attestation: `gh attestation verify <the ZIP> --repo songyb111-gachon/codex-compat-reporter`
-says which workflow run and commit made it.
+The release ZIP in the quick start above holds this file with `Report.exe`, its window, and
+`Report.cmd`, which runs `guide`, below. Each release is built from its tag by GitHub Actions, with the
+ZIP's SHA-256 beside it and a build attestation: `gh attestation verify <the ZIP> --repo songyb111-gachon/codex-compat-reporter`
+says which workflow run and commit made it. `Report.exe` is compiled in that same run, from
+[gui/](gui/) by [tools/make_exe.py](tools/make_exe.py) with the C# compiler of .NET Framework 4.8 that
+every Windows has, and the same sources and compiler give the same bytes, so it can be built again from
+the tag and compared.
+
+`Report.exe` decides nothing itself. It runs `codex_compat_report.py` beside it with the Python
+`Report.cmd` would use, isolated and with no console window, and shows what the file answers through
+its `--json` interface - `survey`, `login`, `report --keep --json`, `submit --json` and
+`web-steps --json`, one JSON object each. The window and the guide say the same words, made by the
+same functions, and every byte of a report and of a send is this file's.
 
 It is one file of standard-library Python; there is nothing to install. Either clone the repository
 and work in its folder:
@@ -55,10 +100,11 @@ it from.
 It needs:
 
 - Windows, and Python 3.11 or newer. CI runs the tests on Python 3.11, 3.12, 3.13 and 3.14.
-  `Report.cmd` needs none of its own: it takes the Python Codex Auto Resume installs, then the
-  Python launcher, then `python.exe` from a folder on `PATH` - each by its full path, and never the
-  one in the current folder or beside `Report.cmd`, however `PATH` spells that folder. It starts
-  Python isolated (`-I`), so no module is taken from either folder.
+  `Report.exe` and `Report.cmd` need none of their own: they take the Python Codex Auto Resume
+  installs, then the Python launcher, then `python.exe` from a folder on `PATH` - each by its full
+  path, and never the one in the current folder or beside them, however `PATH` spells that folder.
+  They start Python isolated (`-I`), so no module is taken from either folder.
+- For `Report.exe`: .NET Framework 4.8, which is part of every Windows 10 and 11.
 - Codex Auto Resume v0.6.0 or newer, installed, with its watcher having run at least once.
 - For `submit` only: the [GitHub CLI](https://cli.github.com/), signed in with
   `gh auth login --hostname github.com`.
@@ -137,6 +183,8 @@ temporary copy of the upload in your temporary folder, deleted as soon as it is 
 SQLite database that is in WAL mode lets SQLite update its shared-memory index (the `-shm` file),
 as the product's own reads do; no data is written to the database itself. `guide` also opens
 Notepad on the report, and the project's page in your browser, each only when you say yes.
+`Report.exe` opens Notepad only when you choose Open in Notepad, and your browser only when you click
+the project's page or, once it is sent, your pull request on it - the only two addresses it opens.
 
 ## What the report carries, and what is published
 
@@ -192,7 +240,9 @@ main and adds the file again.
 your login, to offer the one `gh` has. When you type `send` it asks all of them again and writes
 exactly as `submit --yes` does, with the SHA-256 of the file pinned as it was when you were asked: a
 file changed since then, or a list of writes that is no longer the one you were shown, is refused
-and nothing is sent.
+and nothing is sent. `Report.exe` asks the same two when it fills in your login, lists the writes on
+its last page from a `--dry-run`, and on Send - after I have read it, and one more question whose
+default answer is Cancel - runs `submit --yes` with the SHA-256 of the bytes it showed you pinned.
 
 The name in the project is always `codex-cli-<version>.json` under your login, whatever you called
 the file on your machine. There is one report per GitHub login per Codex version, and one open

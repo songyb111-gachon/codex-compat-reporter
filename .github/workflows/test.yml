@@ -29,3 +29,17 @@ jobs:
         run: |
           python codex_compat_report.py --version
           python codex_compat_report.py --help
+
+  window:
+    # Report.exe compiled once on its own, so a C# change the in-box compiler refuses fails here by name.
+    # (The tests above compile it too, for the window's tests.) It prints the SHA-256 of what it built.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.13"
+      - name: Build Report.exe
+        run: python tools/make_exe.py --out dist

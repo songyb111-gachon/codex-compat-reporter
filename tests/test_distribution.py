@@ -3,13 +3,14 @@
 - Report.cmd starts the guide beside it with a Python found by full path only - never through the
   current folder, nor the one in it or beside Report.cmd - isolated and in UTF-8, and always waits
   before its window closes (ReportCmdTests);
-- the release ZIP holds the six files a reporter needs and nothing else, the same bytes from the same
-  tree (ReleaseZipTests); the workflow that publishes it builds from the tag alone, keeps write access
-  where none of the repository's code runs, leaves no token on disk, and attests what it publishes
-  (ReleaseWorkflowTests);
-- every picture the READMEs show is there, carries the text it shows and nothing else, and that text
-  is exactly what the guide prints today against the tests' fixture: its values, and no one else's
-  (PictureTests).
+- the release ZIP holds the seven files a reporter needs and nothing else - Report.exe only when it says
+  it is the tool's version - the same bytes from the same tree (ReleaseZipTests); the workflow that
+  publishes it builds from the tag alone, Report.exe included, keeps write access where none of the
+  repository's code runs, leaves no token on disk, and attests what it publishes (ReleaseWorkflowTests);
+- every picture the READMEs show is there, the window's in the quick start and the console's where
+  Report.cmd is, carries the text it shows and nothing else, and the console's text is exactly what the
+  guide prints today against the tests' fixture: its values, and no one else's (PictureTests). The
+  window's text is held to what Report.exe describes in tests/test_window.py, which runs it.
 
 YAML is read as text, as the product's tests/test_workflow_privilege.py reads it: no YAML library is
 needed, and what is held is the text GitHub runs. No test here starts a process (setUpModule).
@@ -40,9 +41,11 @@ import test_report as fixture  # noqa: E402 - sandboxes the homes before the rep
 import codex_compat_report as reporter  # noqa: E402
 import make_pictures  # noqa: E402
 import make_release  # noqa: E402
+import make_window_pictures  # noqa: E402
 
 CMD = ROOT / "Report.cmd"
 WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
+TESTS_WORKFLOW = ROOT / ".github" / "workflows" / "test.yml"
 READMES = (ROOT / "README.md", ROOT / "README.ko.md")
 # The product's checkout, when it sits beside this one (the maintainer's machine, or CAR_CHECKOUT).
 PRODUCT = fixture.PRODUCT
@@ -243,9 +246,28 @@ class ReportCmdTests(unittest.TestCase):
 EPOCH = 1790000001
 
 
+def stand_in_exe(version: str) -> bytes:
+    """A stand-in for Report.exe, which only tools/make_exe.py makes (and no test here may run): all that
+    make_release reads of one - "MZ", and its version resource's ProductVersion String, six bytes of
+    header, then its key and its value. tests/test_window.py reads the real one's."""
+    key, value = "ProductVersion\0".encode("utf-16-le"), (version + "\0").encode("utf-16-le")
+    header = (6 + len(key) + len(value)).to_bytes(2, "little") + (len(value) // 2).to_bytes(2, "little") + b"\1\0"
+    return b"MZ" + b"\0" * 62 + header + key + value + b"\0" * 4
+
+
 class ReleaseZipTests(unittest.TestCase):
+    def setUp(self):
+        # The tree as the release job has it: the repository's files, and Report.exe beside them.
+        self.tree = pathlib.Path(self.enterContext(tempfile.TemporaryDirectory()))
+        for name in make_release.FILES:
+            if name != make_release.EXE:
+                (self.tree / name).parent.mkdir(parents=True, exist_ok=True)
+                (self.tree / name).write_bytes((ROOT / name).read_bytes())
+        (self.tree / make_release.EXE).write_bytes(stand_in_exe(reporter.__version__))
+
     def build(self, folder, **keywords):
-        return make_release.build(reporter.__version__, pathlib.Path(folder), keywords.pop("epoch", EPOCH), **keywords)
+        return make_release.build(reporter.__version__, pathlib.Path(folder), keywords.pop("epoch", EPOCH),
+                                  root=keywords.pop("root", self.tree), **keywords)
 
     def test_every_python_file_compiles_without_a_warning(self):
         """A warning at compile time is printed in the reporter's window on every run (1.3.0 printed
@@ -268,10 +290,10 @@ class ReleaseZipTests(unittest.TestCase):
             self.assertEqual(sorted(path.name for path in pathlib.Path(one).iterdir()),
                              [first.name, first.name + ".sha256"])
 
-    def test_it_holds_the_six_files_as_they_are_and_nothing_else(self):
+    def test_it_holds_the_seven_files_as_they_are_and_nothing_else(self):
         folder = "codex-compat-reporter-%s" % reporter.__version__
-        self.assertEqual(make_release.FILES, ("codex_compat_report.py", "Report.cmd", "README.md", "README.ko.md",
-                                              "LICENSE", "docs/REPORT_FORMAT.md"))
+        self.assertEqual(make_release.FILES, ("codex_compat_report.py", "Report.exe", "Report.cmd", "README.md",
+                                              "README.ko.md", "LICENSE", "docs/REPORT_FORMAT.md"))
         with tempfile.TemporaryDirectory() as out:
             target = self.build(out)
             self.assertEqual(target.name, folder + ".zip")
@@ -279,7 +301,9 @@ class ReleaseZipTests(unittest.TestCase):
                 self.assertEqual(archive.namelist(), ["%s/%s" % (folder, name) for name in make_release.FILES])
                 for entry, name in zip(archive.infolist(), make_release.FILES):
                     with self.subTest(name):
-                        self.assertEqual(archive.read(entry), (ROOT / name).read_bytes())
+                        self.assertEqual(archive.read(entry), (self.tree / name).read_bytes())
+                        if name != make_release.EXE:
+                            self.assertEqual(archive.read(entry), (ROOT / name).read_bytes())
                         self.assertEqual(entry.compress_type, zipfile.ZIP_STORED)
                         self.assertEqual(entry.date_time, time.gmtime(EPOCH - 1)[:6])
                         self.assertEqual((entry.create_system, entry.external_attr), (3, 0o100644 << 16))
@@ -289,9 +313,28 @@ class ReleaseZipTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as out:
             for version in ("9.9.9", "v%s" % reporter.__version__, reporter.__version__ + "-beta"):
                 with self.subTest(version), self.assertRaises(SystemExit):
-                    make_release.build(version, pathlib.Path(out), EPOCH)
+                    make_release.build(version, pathlib.Path(out), EPOCH, root=self.tree)
             self.assertEqual(list(pathlib.Path(out).iterdir()), [])
         self.assertEqual(make_release.declared(), reporter.__version__)
+
+    def test_it_packs_report_exe_only_when_it_is_there_and_says_it_is_the_tools_version(self):
+        """Report.exe is a build output, so the tree can hold none, or one left from another version."""
+        exe = self.tree / make_release.EXE
+        for raw, said in ((None, "python tools/make_exe.py makes Report.exe"),
+                          (stand_in_exe("1.3.1"), "Report.exe says it is 1.3.1, not %s" % reporter.__version__),
+                          (stand_in_exe(reporter.__version__ + ".0"), "says it is %s.0" % reporter.__version__),
+                          (b"MZ" + b"\0" * 200, "says it is no version"),
+                          (stand_in_exe(reporter.__version__)[2:], "says it is no version")):
+            with self.subTest(said), tempfile.TemporaryDirectory() as out:
+                if raw is None:
+                    exe.unlink()
+                else:
+                    exe.write_bytes(raw)
+                with self.assertRaises(SystemExit) as refused:
+                    self.build(out)
+                self.assertIn(said, str(refused.exception))
+                self.assertEqual(list(pathlib.Path(out).iterdir()), [], "nothing is written")
+        self.assertEqual(make_release.product_version(stand_in_exe("2.0.1")), "2.0.1")
 
     def test_a_time_before_1980_or_none_is_the_zip_formats_first(self):
         with tempfile.TemporaryDirectory() as out:
@@ -412,9 +455,11 @@ class ReleaseWorkflowTests(unittest.TestCase):
         # The only fetch is the tag itself, for its message, from this repository.
         fetches = re.findall(r"git fetch .*", scripts)
         self.assertEqual(fetches, ['git fetch --no-tags --depth=1 origin "+refs/tags/$TAG:refs/tags/$TAG"'])
-        # The repository's own code that runs, all of it in the build job: its tests and the ZIP builder.
+        # The repository's own code that runs, all of it in the build job: the window's compiler, the tests
+        # and the ZIP builder.
         self.assertEqual(re.findall(r"python [^\n]*", scripts),
-                         ["python -m unittest discover -s tests", 'python tools/make_release.py --version "$VERSION" --out dist'])
+                         ["python tools/make_exe.py", "python -m unittest discover -s tests",
+                          'python tools/make_release.py --version "$VERSION" --out dist'])
 
     def test_no_expression_is_spliced_into_a_run_script(self):
         """`${{ }}` inside `run:` is text substituted into a shell script; values go through `env:`."""
@@ -457,6 +502,30 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn('export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"', build)
         self.assertIn(r'[[ "$TAG" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]', build)
 
+    def test_the_build_job_compiles_report_exe_from_the_tag_before_the_tests_and_the_zip(self):
+        """Report.exe is in no one's hands before the ZIP: the job compiles it from the tagged gui/, beside
+        codex_compat_report.py, where make_release takes it from - and refuses one of another version."""
+        build = job("build")
+        self.assertIn("runs-on: windows-latest", build, "the compiler is part of Windows")
+        self.assertIn("run: python tools/make_exe.py\n", step(build, "Build Report.exe"))
+        self.assertLess(build.index("- name: Build Report.exe\n"), build.index("- name: Run the tests\n"))
+        self.assertLess(build.index("- name: Run the tests\n"), build.index("- name: Build the ZIP\n"))
+        self.assertIn(make_release.EXE, make_release.FILES)
+
+    def test_ci_compiles_report_exe_on_its_own(self):
+        """So a C# change the in-box compiler refuses fails CI by name, not only inside the window's tests."""
+        tests = TESTS_WORKFLOW.read_text(encoding="utf-8")
+        start = tests.index("\n  window:\n")
+        window = tests[start:]
+        self.assertIn("runs-on: windows-latest", window)
+        self.assertIn("run: python tools/make_exe.py --out dist", window)
+        self.assertEqual(tests.count("persist-credentials: false"), tests.count("uses: actions/checkout@"))
+        self.assertRegex(tests, r"(?m)^permissions: \{\}\s*$")
+        for action, pin in re.findall(r"uses: ([^@\s]+)@(\S+)", tests):
+            with self.subTest(action):
+                self.assertTrue(action.startswith("actions/"))
+                self.assertRegex(pin, r"\A[0-9a-f]{40}\Z")
+
 
 # ------------------------------------------------------------------------------ the pictures
 IMAGE = re.compile(r"!\[([^\]]*)\]\(([^)\s]+)\)")
@@ -471,16 +540,60 @@ class PictureTests(unittest.TestCase):
         return IMAGE.findall(readme.read_text(encoding="utf-8"))
 
     def test_every_picture_the_readmes_show_is_there_and_both_show_the_same_ones(self):
-        expected = ["docs/images/" + name for name, _gh, _question in make_pictures.PICTURES]
+        window = ["docs/images/" + name for name, _page in make_window_pictures.PICTURES]
+        console = ["docs/images/" + name for name, _gh, _question in make_pictures.PICTURES]
         for readme in READMES:
             with self.subTest(readme.name):
                 links = self.linked(readme)
-                self.assertEqual([path for _alt, path in links], expected)
+                self.assertEqual([path for _alt, path in links], window + console)
                 for alt, path in links:
                     self.assertTrue(alt.strip(), "every picture says what it shows")
                     self.assertTrue((ROOT / path).is_file(), path)
+                text = readme.read_text(encoding="utf-8")
+                # The window's pictures in the quick start, and the console's where Report.cmd is.
+                cmd = text.index("\n## Report.cmd")
+                self.assertLess(text.index(window[-1]), cmd)
+                self.assertGreater(text.index(console[0]), cmd)
         self.assertEqual(sorted(path.name for path in (ROOT / "docs" / "images").iterdir()),
-                         sorted(name for name, _gh, _question in make_pictures.PICTURES))
+                         sorted([name for name, _gh, _question in make_pictures.PICTURES]
+                                + [name for name, _page in make_window_pictures.PICTURES]))
+
+    def test_each_window_picture_holds_its_image_and_its_text_and_nothing_else(self):
+        for name, page in make_window_pictures.PICTURES:
+            with self.subTest(name):
+                png = (ROOT / "docs" / "images" / name).read_bytes()
+                chunks = make_pictures.chunks(png)
+                self.assertEqual((chunks[0][0], chunks[-1][0]), ("IHDR", "IEND"))
+                self.assertLessEqual({kind for kind, _body in chunks}, {"IHDR", "PLTE", "IDAT", "iTXt", "IEND"})
+                self.assertEqual([kind for kind, _body in chunks].count("iTXt"), 1)
+                self.assertIsNone(make_pictures.carried(png), "the window's text is under its own keyword")
+                shown = make_window_pictures.carried(png)
+                self.assertTrue(shown.startswith("codex-compat-reporter\nStep %s of 5: " % page), shown[:60])
+
+    def test_nothing_in_a_window_picture_is_anyone_elses(self):
+        every = []
+        for name, _page in make_window_pictures.PICTURES:
+            shown = make_window_pictures.carried((ROOT / "docs" / "images" / name).read_bytes())
+            every.append(shown)
+            with self.subTest(name):
+                make_pictures.refuse_elsewhere(shown, (tempfile.gettempdir(),))
+                self.assertLessEqual(set(re.findall(r"C:\\Users\\([^\\\s]+)", shown)), {make_pictures.LOGIN})
+                self.assertNotIn("@", shown)
+        self.assertIn("signed in here as %s" % make_pictures.LOGIN, "\n".join(every))
+        self.assertIn(make_pictures.SHOWN_FOLDER, "\n".join(every))
+
+    def test_the_window_pictures_answers_are_the_made_up_machines_and_no_one_elses(self):
+        """The fixture Report.exe drew them from, made again here: the guide's pictures' values, with the
+        login ExampleUser and the version of this reporter, and nothing of a temporary folder."""
+        made = make_window_pictures.answers()
+        self.assertEqual(made["survey"]["default_login"], make_pictures.LOGIN)
+        self.assertEqual(made["survey"]["installation"], make_pictures.SHOWN_PRODUCT)
+        self.assertEqual(made["report"]["path"], make_pictures.SHOWN_FOLDER + "\\" + made["survey"]["report_file"]["name"])
+        self.assertEqual(made["plan"]["gh"], make_pictures.SHOWN_GH)
+        self.assertEqual(hashlib.sha256(made["file"].encode("utf-8")).hexdigest(), made["plan"]["sha256"])
+        self.assertIn('"tool_version": "%s"' % reporter.__version__, made["file"])
+        self.assertNotIn("sent", made, "nothing is sent, even in a picture")
+        make_pictures.refuse_elsewhere("\n".join(make_window_pictures.strings(made)), (tempfile.gettempdir(),))
 
     def test_each_picture_holds_its_image_and_its_text_and_nothing_else(self):
         for name in self.frames:

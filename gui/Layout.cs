@@ -12,7 +12,8 @@ namespace CodexCompatReporter
 {
     // The fonts and the scale the window is drawn at. On the screen: the system's message font at the
     // system's DPI (the manifest declares the window system-DPI aware). For --describe and --render: the
-    // same font drawn at a scale given, 1 to 2, in pixels, whatever the machine's DPI is.
+    // same font drawn at a scale given, 1 to 2, in pixels, whatever the machine's DPI is - or, given a
+    // family, that family at the system font's size, as a Windows whose message font it is would draw it.
     internal sealed class Ui
     {
         public readonly float Scale;
@@ -41,12 +42,14 @@ namespace CodexCompatReporter
                           Monospaced(system.SizeInPoints * 10f / 9f, GraphicsUnit.Point));
         }
 
-        public static Ui ForScale(float scale)
+        public static Ui ForScale(float scale, string family)
         {
             Font system = SystemFonts.MessageBoxFont;
+            // new FontFamily refuses a family that is not installed, rather than draw in another one.
+            FontFamily drawn = family == null ? system.FontFamily : new FontFamily(family);
             float pixels = system.SizeInPoints * 96f / 72f * scale;
-            return new Ui(scale, new Font(system.FontFamily, pixels, FontStyle.Regular, GraphicsUnit.Pixel),
-                          new Font(system.FontFamily, pixels * 4f / 3f, FontStyle.Regular, GraphicsUnit.Pixel),
+            return new Ui(scale, new Font(drawn, pixels, FontStyle.Regular, GraphicsUnit.Pixel),
+                          new Font(drawn, pixels * 4f / 3f, FontStyle.Regular, GraphicsUnit.Pixel),
                           Monospaced(pixels * 10f / 9f, GraphicsUnit.Pixel));
         }
 

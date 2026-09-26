@@ -10,6 +10,10 @@
 //   Report.exe --fixture <json> --render <1-5 | confirm> --out <png> [--scale ...] [--size min] [--have-read]
 //       draws that page off-screen into a PNG.
 //
+// Two more, for the README's pictures (tools/make_window_pictures.py): --font <family> draws in that
+// family, at the system font's size, as a Windows whose message font it is would - Segoe UI, Windows'
+// own, where this machine's is another; --end shows the page scrolled to its end, as after reading down it.
+//
 // C# 5 only: this is compiled by the in-box csc (tools/make_exe.py).
 using System;
 using System.Collections.Generic;
@@ -63,7 +67,8 @@ namespace CodexCompatReporter
     internal static class Hooks
     {
         const string Usage = "usage: Report.exe --fixture <json> (--describe <1-5|confirm> | --render <1-5|confirm> " +
-                             "--out <png>) [--scale 1|1.25|1.5|2] [--size default|min] [--have-read]\n" +
+                             "--out <png>) [--scale 1|1.25|1.5|2] [--size default|min] [--have-read] [--font <family>] " +
+                             "[--end]\n" +
                              "--describe takes lists too - 1,2,3 and --scale 1,2 and --size default,min - and then " +
                              "prints a JSON array, one object for each page at each scale and size.\n" +
                              "Without arguments it opens the window.";
@@ -94,6 +99,8 @@ namespace CodexCompatReporter
             string scaleList = "1";
             string sizeList = "default";
             bool haveRead = false;
+            string family = null;
+            bool end = false;
             for (int i = 0; i < arguments.Length; i++)
             {
                 string argument = arguments[i];
@@ -125,6 +132,14 @@ namespace CodexCompatReporter
                 else if (argument == "--have-read")
                 {
                     haveRead = true;
+                }
+                else if (argument == "--font" && more)
+                {
+                    family = arguments[++i];
+                }
+                else if (argument == "--end")
+                {
+                    end = true;
                 }
                 else
                 {
@@ -172,7 +187,7 @@ namespace CodexCompatReporter
                 {
                     foreach (string size in sizes)
                     {
-                        Form form = Made(fixture, page, scale, size == "min", haveRead);
+                        Form form = Made(fixture, page, scale, size == "min", haveRead, family, end);
                         if (form == null)
                         {
                             Error("the fixture does not reach the question asked before sending");
@@ -200,10 +215,12 @@ namespace CodexCompatReporter
         }
 
         // The window at a page, as the person would find it there with the fixture's answers: made, laid
-        // out and drawn off-screen, never shown. For "confirm", the question asked before sending.
-        static Form Made(JsonObject fixture, string page, float scale, bool smallest, bool haveRead)
+        // out and drawn off-screen, never shown. For "confirm", the question asked before sending. With
+        // `end`, the page scrolled to its end.
+        static Form Made(JsonObject fixture, string page, float scale, bool smallest, bool haveRead, string family,
+                         bool end)
         {
-            Ui ui = Ui.ForScale(scale);
+            Ui ui = Ui.ForScale(scale, family);
             ReportForm wizard = new ReportForm(ui, new FixtureCore(fixture), true, Application.ProductVersion);
             if (smallest)
             {
@@ -229,6 +246,28 @@ namespace CodexCompatReporter
                 form.Tag = new Where(wizard.State(), wizard.Page);
             }
             Prepare(form);
+            if (end)
+            {
+                foreach (Control found in form.Controls.Find("page", false))
+                {
+                    // The row lowest on the page, brought into view: the rows move with it. (AutoScrollPosition
+                    // is not set on a control never shown, which is never Created, and a layout of a window
+                    // never shown scrolls it back to the top, so none follows.)
+                    Control last = null;
+                    foreach (Control row in found.Controls)
+                    {
+                        if (last == null || row.Bottom > last.Bottom)
+                        {
+                            last = row;
+                        }
+                    }
+                    ScrollableControl scrolled = found as ScrollableControl;
+                    if (scrolled != null && last != null)
+                    {
+                        scrolled.ScrollControlIntoView(last);
+                    }
+                }
+            }
             return form;
         }
 
