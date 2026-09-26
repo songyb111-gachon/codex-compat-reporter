@@ -833,14 +833,26 @@ def cmd_report(arguments) -> int:
 
 
 # ----------------------------------------------------------------------------------- GitHub
+def _same_folder(entry: pathlib.Path, folder: pathlib.Path) -> bool:
+    try:
+        return entry.is_dir() and os.path.samefile(entry, folder)
+    except OSError:
+        return False
+
+
 def find_gh(path: str | None = None):
-    """gh.exe from an absolute PATH entry, or None. Never the current folder: Windows would
-    otherwise start a gh.exe that sits beside a downloaded script before the real one."""
+    """gh.exe from an absolute PATH entry, or None. Never the current folder, nor the folder this
+    script sits in, however PATH spells them (an absolute entry, `\.`, `..`, an 8.3 name): Windows
+    would otherwise start a gh.exe that sits beside a downloaded script before the real one."""
+    unsafe = [pathlib.Path.cwd(), pathlib.Path(__file__).resolve().parent]
     for entry in (os.environ.get("PATH", "") if path is None else path).split(os.pathsep):
         entry = entry.strip().strip('"')
         if not entry or entry == "." or not pathlib.Path(entry).is_absolute():
             continue
-        candidate = pathlib.Path(entry) / "gh.exe"
+        folder = pathlib.Path(entry)
+        if any(_same_folder(folder, place) for place in unsafe):
+            continue
+        candidate = folder / "gh.exe"
         if candidate.is_file():
             return str(candidate)
     return None

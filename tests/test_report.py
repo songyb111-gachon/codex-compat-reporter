@@ -995,6 +995,12 @@ class SubmitTests(unittest.TestCase):
         (self.work / "gh.exe").write_bytes(b"planted")
         self.assertEqual(reporter.find_gh(".;;relative\\bin;" + str(self.bin)), self.exe)
         self.assertIsNone(reporter.find_gh(".;" + str(self.work.relative_to(self.installation.root))))
+        # The current folder named absolutely, or spelled another way, is still the current folder.
+        with contextlib.chdir(self.work):
+            for spelling in (str(self.work), str(self.work / "."), str(self.work / ".." / self.work.name)):
+                with self.subTest(spelling=spelling):
+                    self.assertIsNone(reporter.find_gh(spelling))
+                    self.assertEqual(reporter.find_gh(spelling + ";" + str(self.bin)), self.exe)
         gh, code, _out, err = self.submit(str(self.file), "--dry-run")
         self.assertEqual(code, 0, err)
         self.assertEqual({call[0] for call in gh.calls}, {self.exe})
