@@ -1,10 +1,13 @@
 """codex-compat-reporter - tell the Codex Auto Resume project how it behaved on your machine.
 
+    python codex_compat_report.py guide
     python codex_compat_report.py status
     python codex_compat_report.py report --login <your GitHub login> [--codex-version V] [--out FILE] [--force]
     python codex_compat_report.py submit [FILE] [--login L] [--sha256 HEX] [--dry-run | --yes]
 
-(`py` works in place of `python` where the Python launcher is installed.)
+(`py` works in place of `python` where the Python launcher is installed.) `guide` is what Report.cmd
+runs when it is double-clicked: the other three, one question at a time, and nothing sent unless the
+person types `send`.
 
 What it reads, on this machine only and read-only: the product's own installation - its plugin
 manifest, its log and the five rotated copies of it, its state database and the compatibility
@@ -51,7 +54,7 @@ import sys
 import tempfile
 import time
 
-__version__ = "1.2.0"
+__version__ = "1.3.0"
 
 REPO = "songyb111-gachon/codex-auto-resume-windows"
 HOST = "github.com"                             # every GitHub call names it; GH_HOST never redirects one
@@ -166,6 +169,7 @@ def known(value, vocabulary):
 class Refused(Exception):
     """Something this tool will not guess at. The message says what to do."""
     exit_code = EXIT_REFUSED
+    written = ()                # what submit --yes had already written to GitHub when it was refused
 
 
 # --------------------------------------------------------------------- what one recovery shows
@@ -721,7 +725,8 @@ def _unplaced_text(notes: dict) -> str:
                         ", ".join("%d: %s" % (many, why) for why, many in sorted(unplaced.items())))
 
 
-def cmd_status(_arguments) -> int:
+def status_lines() -> list:
+    """What this machine can show, a line each, as `status` prints it and the guide's first step."""
     product = installed_product()
     lines = log_lines()
     engine = _dict(watcher_report().get("engine")).get("version")
@@ -729,18 +734,18 @@ def cmd_status(_arguments) -> int:
         current = installed_codex(lines)
     except Refused:
         current = None
-    print("installation   : %s" % PRODUCT)
-    print("product version: %s" % product)
-    print("engine version : %s" % (current or "not reported yet")
-          + ("" if current is None or engine else " (from the log; the watcher has not written its report)"))
+    said = ["installation   : %s" % PRODUCT,
+            "product version: %s" % product,
+            "engine version : %s" % (current or "not reported yet")
+            + ("" if current is None or engine else " (from the log; the watcher has not written its report)")]
     try:
         found = state_rows()
     except Refused as refused:
         found = None
-        print("records here   : cannot be read - %s" % refused)
+        said.append("records here   : cannot be read - %s" % refused)
     else:
         if found is None:
-            print("records here   : none yet (no state database at %s)" % (PRODUCT / "config" / "state.sqlite"))
+            said.append("records here   : none yet (no state database at %s)" % (PRODUCT / "config" / "state.sqlite"))
     if found is not None:
         rows, hidden = found
         timeline = engine_timeline(lines)
@@ -753,12 +758,18 @@ def cmd_status(_arguments) -> int:
                 elsewhere += 1
             else:
                 unplaced[why] += 1
-        print("records here   : %d in all: %d on this engine version, %d on other versions, %s not placed"
-              % (len(rows), on, elsewhere, _unplaced_text({"unplaced": unplaced})))
-        print("hidden         : %d hidden with Clear history, which a report leaves out" % hidden)
+        said.append("records here   : %d in all: %d on this engine version, %d on other versions, %s not placed"
+                    % (len(rows), on, elsewhere, _unplaced_text({"unplaced": unplaced})))
+        said.append("hidden         : %d hidden with Clear history, which a report leaves out" % hidden)
     seen = sum(1 for _when, text in lines if current and passes_checks(text, current))
-    print("local checks   : %s" % ("passed on this version (%d log lines)" % seen if seen
-                                   else "not seen in the logs kept"))
+    said.append("local checks   : %s" % ("passed on this version (%d log line%s)" % (seen, "s"[:seen != 1])
+                                         if seen else "not seen in the logs kept"))
+    return said
+
+
+def cmd_status(_arguments) -> int:
+    for line in status_lines():
+        print(line)
     print()
     print("Write the report with:  python codex_compat_report.py report --login <your GitHub login>")
     return EXIT_OK
@@ -778,23 +789,36 @@ def write_new(target: pathlib.Path, raw: bytes, force: bool) -> None:
         raise Refused("%s could not be written: %s" % (target, error))
 
 
-def cmd_report(arguments) -> int:
+def make_report(login: str, version: str | None = None):
+    """(report, raw, notes): the report this machine would write, held to the project's rules first."""
     notes = {}
-    report = build(arguments.login, arguments.version, notes)
+    report = build(login, version, notes)
     raw = encode(report)
     _parsed, problems = validate(raw)
     if problems:
         raise Refused("The report this machine would write breaks the project's rules, so it was not "
                       "written:\n  - " + "\n  - ".join(problems))
+    return report, raw, notes
+
+
+def summary(report: dict, raw: bytes, notes: dict | None = None) -> list:
+    """The few lines that say what a report holds. `notes` is what building it left out, when known."""
+    said = ["version    : %s" % report["codex_version"],
+            "verdict    : %s" % report["verdict"],
+            "records    : %d, %s" % (len(report["records"]), time_span(report))]
+    if notes is not None:
+        said.append("left out   : %d hidden with Clear history; %d on other engine versions; %s not placed"
+                    % (notes["hidden"], notes["elsewhere"], _unplaced_text(notes)))
+    return said + ["SHA-256    : %s" % hashlib.sha256(raw).hexdigest()]
+
+
+def cmd_report(arguments) -> int:
+    report, raw, notes = make_report(arguments.login, arguments.version)
     target = pathlib.Path(arguments.out) if arguments.out else default_path(report["codex_version"])
     write_new(target, raw, arguments.force)
     print("wrote %s" % target)
-    print("  version    : %s" % report["codex_version"])
-    print("  verdict    : %s" % report["verdict"])
-    print("  records    : %d, %s" % (len(report["records"]), time_span(report)))
-    print("  left out   : %d hidden with Clear history; %d on other engine versions; %s not placed"
-          % (notes["hidden"], notes["elsewhere"], _unplaced_text(notes)))
-    print("  SHA-256    : %s" % hashlib.sha256(raw).hexdigest())
+    for line in summary(report, raw, notes):
+        print("  " + line)
     print()
     print("Read it - it is yours to send or not. Then:  python codex_compat_report.py submit \"%s\"" % target)
     return EXIT_OK
@@ -921,51 +945,74 @@ PUBLISHED_TIMES = ("when the file was written, when each record was detected, de
                    "passed")
 
 
-def cmd_submit(arguments) -> int:
-    path = pick_file(arguments.file)
+def read_report(path) -> bytes:
+    """The file's bytes, read once: these are what is judged, shown and sent."""
     try:
         with open(path, "rb") as handle:
-            raw = handle.read(MAX_BYTES + 1)          # read once; these bytes are what is sent
+            return handle.read(MAX_BYTES + 1)
     except OSError as error:
         raise Refused("%s could not be read: %s. Write the report with `report` first." % (path, error))
+
+
+class Ready:
+    """What submit found before its first write: the bytes, where they go, and what sending writes."""
+
+    def __init__(self, **found):
+        self.__dict__.update(found)
+
+    def writes(self) -> list:
+        return [("the fork %s, which exists already and is not changed otherwise" % self.fork if self.has_fork else
+                 "a fork of %s under your account, %s: public, and kept until you delete it" % (REPO, self.fork)),
+                "the branch %s on it, %s the project's main" % (self.branch,
+                                                              "reset to" if self.has_branch else "made at"),
+                "one commit on that branch adding exactly the bytes above, as %s" % self.target,
+                "one public pull request on %s - a pull request cannot be unpublished" % REPO]
+
+
+def prepare_submit(path, *, login=None, sha256=None, say=print):
+    """Everything submit does before its first write, said through `say`: the file read once and held
+    to the project's rules, and GitHub asked its read-only questions. A Ready, or None when the project
+    is not taking reports yet. `submit` and the guide's send both start here."""
+    raw = read_report(path)
     report, problems = validate(raw)
     if problems:
         raise Refused("%s is not a report the project would accept, so nothing was sent:\n  - %s"
                       % (path, "\n  - ".join(problems)))
-    login = report["reporter"]["github_login"]
-    if arguments.login and arguments.login != login:
-        raise Refused("The file is filed under %s, not %s." % (login, arguments.login))
+    filed_as = report["reporter"]["github_login"]
+    if login and login != filed_as:
+        raise Refused("The file is filed under %s, not %s." % (filed_as, login))
+    login = filed_as
     digest = hashlib.sha256(raw).hexdigest()
-    if arguments.sha256 and arguments.sha256.strip().lower() != digest:
-        raise Refused("%s has changed: its SHA-256 is %s, not %s." % (path, digest, arguments.sha256))
+    if sha256 and sha256.strip().lower() != digest:
+        raise Refused("%s has changed: its SHA-256 is %s, not %s." % (path, digest, sha256))
     target, branch = destination(report["codex_version"], login)
     fork = "%s/%s" % (login, REPO.split("/")[1])
 
-    print("file        : %s" % path)
-    print("bytes       : %d, SHA-256 %s" % (len(raw), digest))
-    print("report      : %s, %d records (%s), verdict %s"
-          % (report["codex_version"], len(report["records"]), time_span(report), report["verdict"]))
-    print("times       : published exactly as recorded, UTC to the second - %s" % PUBLISHED_TIMES)
-    print("left out    : records hidden with Clear history, when the file was written")
-    print("destination : %s, pull request from %s:%s" % (REPO, login, branch))
-    print("              adding %s" % target)
+    say("file        : %s" % path)
+    say("bytes       : %d, SHA-256 %s" % (len(raw), digest))
+    say("report      : %s, %d records (%s), verdict %s"
+        % (report["codex_version"], len(report["records"]), time_span(report), report["verdict"]))
+    say("times       : published exactly as recorded, UTC to the second - %s" % PUBLISHED_TIMES)
+    say("left out    : records hidden with Clear history, when the file was written")
+    say("destination : %s, pull request from %s:%s" % (REPO, login, branch))
+    say("              adding %s" % target)
 
     github = GitHub.find()
     if github.run("auth", "status", "--hostname", HOST)[0]:
         raise Refused("gh is not signed in to github.com. Run `gh auth login --hostname github.com` "
                       "and try again.")
     who = github.must(github.api("GET", "user", "--jq", ".login"), "the question of who is signed in")
-    print("gh          : %s, host %s, signed in as %s" % (github.exe, HOST, who))
+    say("gh          : %s, host %s, signed in as %s" % (github.exe, HOST, who))
     if who != login:
         raise Refused("gh is signed in as %s, so a report filed under %s cannot be sent from here."
                       % (who, login))
 
     door = github.api("GET", "repos/%s/contents/%s" % (REPO, COMMUNITY))
     if _not_found(door):
-        print()
-        print("The project is not taking reports yet: %s does not exist on %s's main." % (COMMUNITY, REPO))
-        print("Nothing was sent. Keep the file, and run submit again when that folder appears.")
-        return EXIT_NOT_OPEN
+        say("")
+        say("The project is not taking reports yet: %s does not exist on %s's main." % (COMMUNITY, REPO))
+        say("Nothing was sent. Keep the file, and send it when that folder appears.")
+        return None
     github.must(door, "a look at %s" % COMMUNITY)
     filed = github.api("GET", "repos/%s/contents/%s" % (REPO, target))
     if filed[0] == 0:
@@ -1014,33 +1061,295 @@ def cmd_submit(arguments) -> int:
                        "a look at the project's main")
     if not re.fullmatch(r"[0-9a-f]{40}", base):
         raise Refused("GitHub did not give the project's main as a commit: %r" % base[:80])
+    return Ready(raw=raw, report=report, login=login, fork=fork, branch=branch, target=target, base=base,
+                 has_fork=has_fork, has_branch=has_branch, github=github)
 
+
+def send(ready: Ready, say=print) -> int:
+    """The writes of submit --yes, and what it says once the pull request is open."""
+    written = []                                        # what is on GitHub now that was not before
+    try:
+        url = _write(ready.github, ready.report, ready.raw, ready.login, ready.fork, ready.branch, ready.target,
+                     ready.base, ready.has_fork, ready.has_branch, written)
+    except Refused as refused:
+        if not written:
+            raise
+        partly = Refused("%s\nAlready written to GitHub by this run: %s. Running submit again is safe: it "
+                         "keeps the fork, resets the branch to the project's main and adds the file again."
+                         % (refused, "; ".join(written)))
+        partly.written = written
+        raise partly from None
+    say("opened: %s" % url)
+    say(AFTER_SUBMIT)
+    return EXIT_OK
+
+
+def cmd_submit(arguments) -> int:
+    ready = prepare_submit(pick_file(arguments.file), login=arguments.login, sha256=arguments.sha256)
+    if ready is None:
+        return EXIT_NOT_OPEN
     print()
-    print("With --yes this writes to GitHub, as %s:" % login)
-    print("  - %s" % ("the fork %s, which exists already and is not changed otherwise" % fork if has_fork else
-                      "a fork of %s under your account, %s: public, and kept until you delete it" % (REPO, fork)))
-    print("  - the branch %s on it, %s the project's main" % (branch, "reset to" if has_branch else "made at"))
-    print("  - one commit on that branch adding exactly the bytes above, as %s" % target)
-    print("  - one public pull request on %s - a pull request cannot be unpublished" % REPO)
+    print("With --yes this writes to GitHub, as %s:" % ready.login)
+    for write in ready.writes():
+        print("  - %s" % write)
     if arguments.dry_run:
         print()
         print("--dry-run: nothing was written. The calls above only read from GitHub.")
         return EXIT_OK
     if not arguments.yes:
         raise Refused("Nothing was sent. Add --yes when you have read the file and want it public.")
+    return send(ready)
 
-    written = []                                        # what is on GitHub now that was not before
+
+# ------------------------------------------------------------------------------------ the guide
+def _windows_folder() -> pathlib.Path:
+    """The Windows folder, from SystemRoot when that is a full path, and C:\\Windows when it is not."""
+    root = os.environ.get("SystemRoot") or ""
+    return pathlib.Path(root) if pathlib.PureWindowsPath(root).is_absolute() else pathlib.Path("C:\\Windows")
+
+
+# The two windows the guide opens, each only when the person says yes: Notepad on the report, and the
+# project's page in the default browser, which File Explorer opens when it is handed an address. Both
+# are GUI programs, named by their full path in the Windows folder. Windows makes no console for a GUI
+# program, so show() is the one start here without CREATE_NO_WINDOW: a window is what was asked for.
+NOTEPAD = _windows_folder() / "System32" / "notepad.exe"
+BROWSER = _windows_folder() / "explorer.exe"
+PROJECT_PAGE = "https://%s/%s" % (HOST, REPO)
+STEPS = 5
+
+
+def show(program: pathlib.Path, argument: str) -> bool:
+    """Open a window the person asked for; False when it could not be started."""
     try:
-        url = _write(github, report, raw, login, fork, branch, target, base, has_fork, has_branch, written)
-    except Refused as refused:
-        if not written:
-            raise
-        raise Refused("%s\nAlready written to GitHub by this run: %s. Running submit again is safe: it "
-                      "keeps the fork, resets the branch to the project's main and adds the file again."
-                      % (refused, "; ".join(written))) from None
-    print("opened:", url)
-    print(AFTER_SUBMIT)
-    return EXIT_OK
+        subprocess.Popen([str(program), argument], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, close_fds=True)
+    except OSError:
+        return False
+    return True
+
+
+class Stop(Exception):
+    """The person gave the answer that goes no further. Nothing has been sent, and nothing will be."""
+
+
+def ask(question: str, default: str = "") -> str:
+    """One answer, trimmed, or the default when it is empty. The end of the input and Ctrl+C stop the
+    guide: silence is never taken for a yes."""
+    try:
+        answer = input(question)
+    except (EOFError, KeyboardInterrupt):
+        print()
+        raise Stop() from None
+    return answer.strip() or default
+
+
+def agree(question: str, default: bool) -> bool:
+    """y or yes is yes; an empty answer is the default; anything else is no."""
+    answer = ask("%s %s " % (question, "[Y/n]" if default else "[y/N]")).lower()
+    return default if not answer else answer in ("y", "yes")
+
+
+def signed_in():
+    """(gh, login) when gh is on PATH and signed in to github.com; (gh or None, None) when it is not.
+    Only read-only questions: whether it is signed in, and as whom."""
+    exe = find_gh()
+    if not exe:
+        return None, None
+    github = GitHub(exe)
+    try:
+        if github.run("auth", "status", "--hostname", HOST)[0]:
+            return github, None
+        code, out, _err = github.api("GET", "user", "--jq", ".login")
+    except Refused:                                  # gh is there but would not start
+        return None, None
+    return github, (out if code == 0 and LOGIN.match(out) else None)
+
+
+class Guide:
+    """status, report and submit, one question at a time, in plain words.
+
+    Every question has an answer that goes no further, and it is the one taken when nothing is typed,
+    when the input ends and on Ctrl+C. Sending takes the word `send`, typed after the file has been
+    written, shown and offered to be read; it then goes exactly the way `submit --yes` goes, with the
+    SHA-256 of the file as it was when the person was asked pinned, so a file changed after that is
+    refused, not sent."""
+
+    def __init__(self):
+        self.path = None            # the report on disk, once there is one
+        self.sending = False        # from the word send on
+
+    def run(self) -> int:
+        try:
+            return self.steps()
+        except Stop:
+            self.unsent()
+            return EXIT_OK
+        except Refused as refused:
+            print(refused, file=sys.stderr)
+            if refused.written:                     # the refusal says what reached GitHub
+                print("The report stays here: %s" % self.path)
+            else:
+                self.unsent()
+            return refused.exit_code
+        except KeyboardInterrupt:                   # Ctrl+C while no question was being asked
+            print()
+            if self.sending:
+                print("Stopped while sending: what reached GitHub stays there, and running this again is safe.")
+            else:
+                self.unsent()
+            return EXIT_REFUSED
+
+    def unsent(self):
+        if self.path is None:
+            print("Nothing was written, and nothing was sent.")
+        else:
+            print("Nothing was sent. The report stays here, yours to send or delete:")
+            print("  %s" % self.path)
+
+    @staticmethod
+    def step(number: int, title: str):
+        print()
+        print("Step %d of %d: %s" % (number, STEPS, title))
+
+    def steps(self) -> int:
+        print("codex-compat-reporter %s: how Codex Auto Resume behaved on this machine, as a file." % __version__)
+        print("Nothing leaves this machine unless you type send at the end.")
+
+        self.step(1, "what this machine can show")
+        for line in status_lines():
+            print("  " + line)
+        installed_codex()                                # the reason, when there is no version to report
+        if state_rows() is None:
+            raise Refused("This machine has no recovery state yet (%s): let the watcher run first."
+                          % (PRODUCT / "config" / "state.sqlite"))
+
+        self.step(2, "your GitHub login")
+        print("  The report is filed under it, and it is public once sent.")
+        _gh, offered = signed_in()
+        if offered:
+            print("  gh, the GitHub CLI, is signed in here as %s: press Enter to use it." % offered)
+        login = self.login(offered)
+
+        self.step(3, "write the report")
+        report, raw, notes = make_report(login)
+        target = default_path(report["codex_version"])
+        over = False
+        if target.exists():
+            print("  %s is already in this folder, and it may be the one you read before." % target.name)
+            over = agree("  Write a new one over it?", False)
+            if not over:
+                notes = None
+                raw = read_report(target)
+                report, problems = validate(raw)
+                if problems:
+                    raise Refused("%s is not a report the project would accept:\n  - %s"
+                                  % (target, "\n  - ".join(problems)))
+                if report["reporter"]["github_login"] != login:
+                    raise Refused("%s is filed under %s, not %s: write a new one over it to go on."
+                                  % (target, report["reporter"]["github_login"], login))
+                self.path = target
+                print("  Kept as it is: the next steps use it.")
+        if self.path is None:
+            write_new(target, raw, over)
+            self.path = target
+            print("  Written, from this machine's own records.")
+        for line in summary(report, raw, notes):
+            print("    " + line)
+
+        self.step(4, "read it")
+        print("  It is short, and reading it is the only way to be sure of what would be sent:")
+        print("  %s" % target)
+        if agree("  Open it in Notepad?", True):
+            if show(NOTEPAD, str(target)):
+                ask("  It is open in Notepad. Press Enter here when you have read it. ")
+            else:
+                print("  Notepad could not be started: open the file above yourself.")
+        reviewed = read_report(target)
+        if reviewed != raw:
+            print("  The file has changed since it was written. What would be sent is what it holds now.")
+        report, problems = validate(reviewed)
+        if problems:
+            raise Refused("%s is not a report the project would accept, so it cannot be sent:\n  - %s"
+                          % (target, "\n  - ".join(problems)))
+        digest = hashlib.sha256(reviewed).hexdigest()
+
+        self.step(5, "send it, or not")
+        github, who = signed_in()
+        if who != login:
+            return self.on_the_web(report, login, github, who)
+        indented = lambda text="": print("  " + text if text else "")   # noqa: E731
+        ready = prepare_submit(target, login=login, sha256=digest, say=indented)
+        if ready is None:
+            print("  The report stays here: %s" % target)
+            return EXIT_NOT_OPEN
+        print()
+        print("  Sending writes to GitHub, as %s:" % login)
+        for write in ready.writes():
+            print("    - %s" % write)
+        if ask("  Type send to send it now, or press Enter to keep it here unsent: ").lower() != "send":
+            raise Stop()
+        self.sending = True
+        # The same questions again, now, and the file held to the SHA-256 just shown: what is sent is
+        # what was read, and what is written to GitHub is what was listed.
+        again = prepare_submit(target, login=login, sha256=digest, say=lambda text="": None)
+        if again is None:
+            print("  The project stopped taking reports while you were asked. The report stays here: %s" % target)
+            return EXIT_NOT_OPEN
+        if again.writes() != ready.writes():
+            raise Refused("What sending would write to GitHub changed while you were asked, so nothing was "
+                          "sent. Run the guide again to be asked about what it is now.")
+        return send(again, say=indented)
+
+    def login(self, offered):
+        for _attempt in range(3):
+            answer = ask("  GitHub login%s: " % (" [%s]" % offered if offered else ""), offered or "")
+            if not answer:
+                raise Stop()
+            if not LOGIN.match(answer):
+                print("  That is not a GitHub login: up to 39 letters, digits and single hyphens, with no "
+                      "hyphen first or last.")
+                continue
+            try:
+                return check_login(answer)
+            except Refused as refused:                  # a name Windows keeps for a device
+                print("  %s" % refused)
+        raise Refused("No GitHub login was given.")
+
+    def on_the_web(self, report, login, github, who) -> int:
+        """Without gh signed in as the login, the report is sent on the web, by the person, or not at all."""
+        if github is None:
+            print("  gh, the GitHub CLI, is not installed here, so this cannot send the report for you.")
+        elif who is None:
+            print("  gh, the GitHub CLI, is not signed in to github.com here, so this cannot send the report.")
+        else:
+            print("  gh, the GitHub CLI, is signed in here as %s, not %s, so this cannot send the report."
+                  % (who, login))
+        if github is not None:
+            print("  Sign it in as %s (gh auth login --hostname github.com) and run this again to send from here."
+                  % login)
+        path, branch = destination(report["codex_version"], login)
+        print("  The report stays here:")
+        print("  %s" % self.path)
+        print()
+        print("  To send it on the web instead, signed in to GitHub as %s:" % login)
+        print("    1. Open %s and choose Fork" % PROJECT_PAGE)
+        print("       (a fork you already have will do).")
+        print("    2. In your fork, open the branch list (it shows main), type this name and choose Create branch:")
+        print("         %s" % branch)
+        print("    3. On that branch, choose Add file > Create new file, and give it this name:")
+        print("         %s" % path)
+        print("       Paste the whole report into it (in Notepad: Ctrl+A, Ctrl+C) and commit it to that branch.")
+        print("    4. Choose Contribute > Open pull request, to the project's main, and create it.")
+        print("       One report pull request of yours may be open at a time; send this once any other is closed.")
+        print("  The project's check then reads it within minutes, just as it reads one sent from here.")
+        if agree("  Open the project's page in your browser?", False):
+            if not show(BROWSER, PROJECT_PAGE):
+                print("  The browser could not be started: open %s yourself." % PROJECT_PAGE)
+        return EXIT_OK
+
+
+def cmd_guide(_arguments) -> int:
+    return Guide().run()
 
 
 def _version_argument(value):
@@ -1057,6 +1366,9 @@ def main(argv=None) -> int:
                "is not taking reports yet (submit sent nothing).")
     parser.add_argument("--version", action="version", version="codex-compat-reporter " + __version__)
     commands = parser.add_subparsers(dest="command", required=True)
+    guide = commands.add_parser("guide", help="step by step, one question at a time: what this machine can "
+                                              "show, the report, and sending it only if you type send")
+    guide.set_defaults(run=cmd_guide)
     status = commands.add_parser("status", help="what this machine can show")
     status.set_defaults(run=cmd_status)
     report = commands.add_parser("report", help="write the report, for you to read")
