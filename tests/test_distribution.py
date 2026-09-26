@@ -247,6 +247,17 @@ class ReleaseZipTests(unittest.TestCase):
     def build(self, folder, **keywords):
         return make_release.build(reporter.__version__, pathlib.Path(folder), keywords.pop("epoch", EPOCH), **keywords)
 
+    def test_every_python_file_compiles_without_a_warning(self):
+        """A warning at compile time is printed in the reporter's window on every run (1.3.0 printed
+        an invalid escape in a docstring), and a later Python makes some of them errors."""
+        import warnings
+        files = sorted(path for path in ROOT.rglob("*.py") if "__pycache__" not in path.parts)
+        self.assertIn(ROOT / "codex_compat_report.py", files)
+        for path in files:
+            with self.subTest(path.relative_to(ROOT).as_posix()), warnings.catch_warnings():
+                warnings.simplefilter("error")
+                compile(path.read_text(encoding="utf-8"), str(path), "exec")
+
     def test_the_same_tree_gives_the_same_bytes(self):
         with tempfile.TemporaryDirectory() as one, tempfile.TemporaryDirectory() as two:
             first, second = self.build(one), self.build(two)
