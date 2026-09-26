@@ -1,0 +1,9 @@
+# Every text file is checked out with CRLF, whatever the machine's core.autocrlf says. The release ZIP
+# packs files as the checkout wrote them, so their line endings are part of its bytes: left to each
+# machine's Git settings, two checkouts of one tag would give two ZIPs. The repository stores LF.
+* text=auto eol=crlf
+
+# cmd.exe misreads labels and `goto` in a batch file with LF endings, wherever it was unpacked.
+*.cmd text eol=crlf
+
+*.png binary

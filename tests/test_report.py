@@ -1195,6 +1195,12 @@ class GuideTests(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertFalse(self.file.exists())
 
+    def test_a_byte_order_mark_is_never_part_of_an_answer(self):
+        """Windows PowerShell puts one before the text it pipes into a program (Report.cmd, 2026-09-27)."""
+        code, said, _gh, _asked, _shown = self.guide("\ufeffsomeone", "\ufeffn", gh=False)
+        self.assertEqual(code, 0, said)
+        self.assertEqual(json.loads(self.file.read_bytes())["reporter"]["github_login"], "someone")
+
     def test_a_file_already_there_is_kept_unless_the_person_says_to_write_over_it(self):
         report, raw, _notes = reporter.make_report(LOGIN)
         kept = json.loads(raw)

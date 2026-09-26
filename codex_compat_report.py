@@ -1140,7 +1140,8 @@ def ask(question: str, default: str = "") -> str:
     except (EOFError, KeyboardInterrupt):
         print()
         raise Stop() from None
-    return answer.strip() or default
+    # A byte order mark is what Windows PowerShell puts before text it pipes in: never part of an answer.
+    return answer.replace("\ufeff", "").strip() or default
 
 
 def agree(question: str, default: bool) -> bool:
