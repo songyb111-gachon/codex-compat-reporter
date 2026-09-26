@@ -2,3 +2,5 @@ __pycache__/
 *.pyc
 codex-cli-*.json
 dist/
+# Built by tools/make_exe.py: a build output, never in the repository.
+Report.exe
