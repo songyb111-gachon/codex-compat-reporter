@@ -1,7 +1,8 @@
 """What the reporter ships, and the pictures that show it, held to tests.
 
 - Report.cmd starts the guide beside it with a Python found by full path only - never through the
-  current folder - in UTF-8, and always waits before its window closes (ReportCmdTests);
+  current folder, nor the one in it or beside Report.cmd - isolated and in UTF-8, and always waits
+  before its window closes (ReportCmdTests);
 - the release ZIP holds the six files a reporter needs and nothing else, the same bytes from the same
   tree (ReleaseZipTests); the workflow that publishes it builds from the tag alone, keeps write access
   where none of the repository's code runs, leaves no token on disk, and attests what it publishes
@@ -17,6 +18,7 @@ needed, and what is held is the text GitHub runs. No test here starts a process 
 """
 from __future__ import annotations
 
+import ast
 import hashlib
 import pathlib
 import re
@@ -80,6 +82,36 @@ def block(label: str) -> list:
     return rest[:end]
 
 
+def first_pass(line: str, env: dict) -> str:
+    """What cmd makes of a line before it reads it: %% and %NAME% and %NAME:old=new% expanded, which is
+    all Report.cmd does to PATH. (cmd matches `old` in any letter case; the two here are ; and ".)"""
+    def one(found):
+        if found.group(0) == "%%":
+            return "%"
+        value = env.get(found.group(1), "")
+        return value if found.group(2) is None else value.replace(found.group(2), found.group(3))
+    return re.sub(r"%%|%(\w+)(?::([^=%]+)=([^%]*))?%", one, line)
+
+
+def loop_items(line: str) -> list:
+    """The items of a `for %D in (...) do` line as cmd reads them. The list ends at the first ) outside
+    quotes, and anything but a space outside quotes - & | < > ( ^ - would be read as cmd's own."""
+    start = line.index(" in (") + len(" in (")
+    quoted = False
+    for at in range(start, len(line)):
+        if line[at] == '"':
+            quoted = not quoted
+        elif not quoted and line[at] == ")":
+            break
+        elif not quoted and line[at] != " ":
+            raise AssertionError("%r outside quotes at %d: %s" % (line[at], at, line))
+    else:
+        raise AssertionError("the list never ends: %s" % line)
+    if not line[at:].startswith(") do "):
+        raise AssertionError("the list ends early: %s" % line[at:])
+    return re.findall(r'"([^"]*)"', line[start:at])
+
+
 class ReportCmdTests(unittest.TestCase):
     def test_it_is_plain_ascii_with_crlf_line_endings(self):
         """cmd.exe misreads labels in a batch file with bare LF endings; .gitattributes keeps CRLF."""
@@ -125,20 +157,62 @@ class ReportCmdTests(unittest.TestCase):
                     self.assertIn('if exist "%s"' % found.group(1), line, "set only when that very file is there")
         self.assertIn('if defined PYTHON set "PYTHON_FLAGS=-3"', lines, "the launcher is asked for Python 3")
 
-    def test_a_path_entry_counts_only_as_a_full_path_that_is_neither_folder(self):
-        look = block("look")
-        for line in ('if not "%ENTRY:~1,2%"==":\\" if not "%ENTRY:~0,2%"=="\\\\" exit /b 0',
-                     'if /i "%ENTRY%"=="%CURRENT%" exit /b 0', 'if /i "%ENTRY%"=="%HERE%" exit /b 0'):
-            self.assertIn(line, look)
+    def test_a_path_entry_counts_only_as_a_full_path_and_never_as_either_folder_however_spelled(self):
+        """The folder's name, compared as text, let C:\\x\\. or C:\\y\\..\\x or a short name stand for the
+        folder and run a python.exe planted in it (2026-09-27). The file is compared instead: every
+        spelling of one file gives its size and time."""
+        look, lines = block("look"), cmd_lines()
+        self.assertIn('if not "%ENTRY:~1,2%"==":\\" if not "%ENTRY:~0,2%"=="\\\\" exit /b 0', look)
+        signature = '%%~zF %%~tF"'
+        cleared = [lines.index('set "CURRENT_PYTHON="'), lines.index('set "HERE_PYTHON="')]
+        taken = [lines.index('for %%F in ("%CURRENT%\\python.exe") do if exist "%%~F" set "CURRENT_PYTHON=' + signature),
+                 lines.index('for %%F in ("%~dp0python.exe") do if exist "%%~F" set "HERE_PYTHON=' + signature)]
+        walk = next(n for n, line in enumerate(lines) if " call :look " in line)
+        self.assertLess(max(cleared), min(taken), "a value set outside this file is never used")
+        self.assertLess(max(taken), walk)
+        order = [look.index(line) for line in (
+            'set "SEEN="', 'for %%F in ("%ENTRY%\\python.exe") do if exist "%%~F" set "SEEN=' + signature,
+            "if not defined SEEN exit /b 0", 'if "%SEEN%"=="%CURRENT_PYTHON%" exit /b 0',
+            'if "%SEEN%"=="%HERE_PYTHON%" exit /b 0', 'if exist "%ENTRY%\\python.exe" set "PYTHON=%ENTRY%\\python.exe"')]
+        self.assertEqual(order, sorted(order))
+        self.assertEqual([line for line in lines if '"%ENTRY%"==' in line], [], "no folder is compared by its name")
+
+    def test_path_is_read_without_its_quotes_so_no_entry_can_end_the_list(self):
+        """A quoted entry with a ) in it, "C:\\Program Files (x86)\\Foo", turned the quoting of the list
+        inside out, and cmd stopped the whole file with a syntax error before it could say anything or
+        wait (2026-09-27). Held here by reading the two lines as cmd does, over PATHs a machine can have."""
         lines = cmd_lines()
-        self.assertIn('set "CURRENT=%CD%"', lines)
-        self.assertIn('set "HERE=%~dp0"', lines)
-        self.assertIn('if defined PATH for %%D in ("%PATH:;=" "%") do if not defined PYTHON call :look "%%~D"', lines)
+        copy = lines.index('if defined PATH set "ENTRIES=%PATH:"=%"')
+        loop = lines.index('if defined ENTRIES for %%D in ("%ENTRIES:;=" "%") do if not defined PYTHON call :look "%%~D"')
+        self.assertLess(lines.index('set "ENTRIES="'), copy)
+        self.assertLess(copy, loop)
+        for path in (r'C:\Windows\System32;"C:\Program Files (x86)\Foo";C:\Python313', r'"C:\Python313"',
+                     r'"C:\A & B";C:\B | C;C:\D <E> ^F;', r'C:\a;;"C:\Q;R";', r'C:\Program Files (x86)\Bar'):
+            with self.subTest(path):
+                copied = first_pass(lines[copy], {"PATH": path})
+                self.assertEqual(copied.count('"'), 2, "the whole value inside one pair of quotes")
+                value = re.fullmatch(r'if defined PATH set "ENTRIES=(.*)"', copied).group(1)
+                self.assertEqual(value, path.replace('"', ""))
+                self.assertEqual(loop_items(first_pass(lines[loop], {"ENTRIES": value})), value.split(";"))
+
+    def test_python_runs_isolated_and_the_tool_needs_nothing_beside_it(self):
+        """Without -I, Python looks in the script's own folder - or, for a long path, the current one - for
+        each module the tool imports: a downloaded json.py beside Report.cmd ran (2026-09-27)."""
+        runs = [line for line in cmd_lines() if line.startswith('"%PYTHON%"')]
+        self.assertEqual(len(runs), 1)
+        self.assertIn("-I", runs[0].split('"%SCRIPT%"')[0].split())
+        # And -I takes nothing away: all the tool imports is the standard library's.
+        tree = ast.parse(pathlib.Path(reporter.__file__).read_text(encoding="utf-8"))
+        imported = {alias.name.split(".")[0] for node in ast.walk(tree) if isinstance(node, ast.Import)
+                    for alias in node.names}
+        imported |= {node.module.split(".")[0] for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)}
+        self.assertIn("argparse", imported)
+        self.assertLessEqual(imported, set(sys.stdlib_module_names))
 
     def test_it_runs_the_guide_beside_it_in_utf8_and_always_waits_before_closing(self):
         lines = cmd_lines()
         self.assertIn('set "SCRIPT=%~dp0codex_compat_report.py"', lines)
-        self.assertIn('"%PYTHON%" %PYTHON_FLAGS% -X utf8 "%SCRIPT%" guide', lines)
+        self.assertIn('"%PYTHON%" %PYTHON_FLAGS% -I -X utf8 "%SCRIPT%" guide', lines)
         self.assertEqual([line for line in lines if line.strip()][-3:], ["echo.", "pause", "exit /b %EXIT_CODE%"])
         self.assertEqual(sum(1 for line in lines if line.strip().lower() == "pause"), 1)
         # Every way out goes through :finished: the only other exits return from :look.

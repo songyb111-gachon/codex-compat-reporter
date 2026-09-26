@@ -861,6 +861,18 @@ class SubmitTests(unittest.TestCase):
         gh, code, _out, err = self.submit(str(self.file), "--yes", "--login", "other")
         self.assertEqual((code, gh.calls), (2, []))
 
+    def test_a_file_filed_under_the_login_in_another_letter_case_says_how_github_spells_it(self):
+        """Not "signed in as someone, so ... Someone cannot be sent": it is the same account, and the
+        project takes the report only under someone (community_check.py compares the folder exactly)."""
+        other = self.work / "typed-in-another-case.json"
+        code, _out, err = run_main("report", "--login", "Someone", "--out", str(other))
+        self.assertEqual(code, 0, err)
+        gh, code, _out, err = self.submit(str(other), "--yes")
+        self.assertEqual((code, gh.writes()), (2, []))
+        self.assertIn("filed under Someone, but GitHub spells that login someone", err)
+        self.assertIn("report --login someone --force", err)
+        self.assertNotIn("cannot be sent from here", err)
+
     def test_gh_not_signed_in_is_a_clear_refusal(self):
         gh, code, _out, err = self.submit(str(self.file), "--yes", signed_in=False)
         self.assertEqual((code, len(gh.calls)), (2, 1))
@@ -1183,6 +1195,28 @@ class GuideTests(unittest.TestCase):
         self.assertEqual(asked[0], "  GitHub login [somebody-else]: ")
         self.assertIn("signed in here as somebody-else, not someone", said)
 
+    def test_a_login_typed_in_another_letter_case_is_filed_as_github_spells_it(self):
+        """GitHub takes Someone for someone, but the project files a report only under the pull request's
+        author as GitHub spells it: the guide takes gh's spelling, and sends from here."""
+        code, said, gh, asked, _shown = self.guide("Someone", "", "", "send")
+        self.assertEqual(code, 0, said)
+        self.assertIn("GitHub spells that login someone", said)
+        self.assertEqual(json.loads(self.file.read_bytes())["reporter"]["github_login"], "someone")
+        self.assertEqual(self.questions(asked), [LOGIN_Q, OPEN_Q, READ_Q, SEND_Q])
+        self.assertEqual(base64.b64decode(gh.uploads[0]["content"]), self.file.read_bytes())
+        self.assertNotIn("Sign it in as", said)
+
+    def test_gh_signed_in_after_the_login_as_the_same_account_is_not_sent_the_web_way(self):
+        """The web steps would name a folder the project refuses, and "sign it in" would change nothing."""
+        def sign_in():
+            self.gh.signed_in = True
+            return "n"
+        code, said, gh, _asked, _shown = self.guide("Someone", sign_in, signed_in=False)
+        self.assertEqual((code, gh.writes()), (2, []))
+        self.assertIn("filed under Someone, but GitHub spells that login someone", said)
+        self.assertNotIn("To send it on the web", said)
+        self.assertIn("Nothing was sent. The report stays here", said)
+
     def test_the_login_is_held_to_the_same_rules_and_asked_again(self):
         code, said, _gh, asked, _shown = self.guide("not a login", "nul", gh=False)
         self.assertEqual(code, 0)
@@ -1241,6 +1275,20 @@ class GuideTests(unittest.TestCase):
         self.assertEqual((code, gh.writes()), (2, []))
         self.assertIn("already filed", said)
         self.assertIn("Nothing was sent. The report stays here", said)
+
+    def test_the_readmes_say_that_a_refused_guide_keeps_what_it_wrote(self):
+        """Exit code 2 from the guide can come after it wrote the report, and after its own send wrote to
+        GitHub: neither README may say that a refusal wrote nothing, outside submit --yes."""
+        code, _said, _gh, _asked, _shown = self.guide("", "", "", "send", filed=True)
+        self.assertEqual(code, 2)
+        self.assertTrue(self.file.is_file())
+        for name in ("README.md", "README.ko.md"):
+            with self.subTest(name):
+                rows = [line for line in (HERE.parent / name).read_text(encoding="utf-8").splitlines()
+                        if line.startswith("| 2 |")]
+                self.assertEqual(len(rows), 1)
+                self.assertEqual(rows[0].count("`guide`"), 2, "the file it keeps, and its send after `send`")
+                self.assertNotIn("Nothing was written or sent - except under `submit --yes`", rows[0])
 
     def test_a_refusal_after_writes_does_not_say_nothing_was_sent(self):
         code, said, gh, _asked, _shown = self.guide("", "", "", "send",

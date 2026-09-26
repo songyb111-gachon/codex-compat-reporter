@@ -56,8 +56,9 @@ It needs:
 
 - Windows, and Python 3.11 or newer. CI runs the tests on Python 3.11, 3.12, 3.13 and 3.14.
   `Report.cmd` needs none of its own: it takes the Python Codex Auto Resume installs, then the
-  Python launcher, then `python.exe` from a folder on `PATH` - each by its full path, and never one
-  in the current folder.
+  Python launcher, then `python.exe` from a folder on `PATH` - each by its full path, and never the
+  one in the current folder or beside `Report.cmd`, however `PATH` spells that folder. It starts
+  Python isolated (`-I`), so no module is taken from either folder.
 - Codex Auto Resume v0.6.0 or newer, installed, with its watcher having run at least once.
 - For `submit` only: the [GitHub CLI](https://cli.github.com/), signed in with
   `gh auth login --hostname github.com`.
@@ -107,7 +108,7 @@ machine.
 | --- | --- |
 | 0 | Done: `status` printed, `report` wrote the file, `submit --dry-run` checked everything, or `submit --yes` opened the pull request. For `guide`: it came to an end, whether it sent the report or you kept it. |
 | 1 | An unexpected error - a bug. Please open an issue with what it printed. |
-| 2 | Refused, with the reason and what to do on the error output. Nothing was written or sent - except under `submit --yes`, where a step on GitHub can fail after earlier ones have written (the fork, the branch, the uploaded file). The message then lists what that run wrote, and running `submit` again is safe: it keeps the fork, resets the branch to the project's main and adds the file again. Also a mistake in the command line. |
+| 2 | Refused, with the reason and what to do on the error output. Nothing was sent, and nothing written, with two exceptions. `guide` may be refused after it has written the report: it keeps the file and says where it is. And a send - `submit --yes`, or `guide` after you typed `send` - can fail at a step on GitHub after earlier ones have written (the fork, the branch, the uploaded file). The message then lists what that run wrote, and sending again is safe: it keeps the fork, resets the branch to the project's main and adds the file again. Also a mistake in the command line. |
 | 3 | `submit` or `guide`: the project is not taking reports yet. Nothing was sent; keep the file. |
 
 ## What it reads
