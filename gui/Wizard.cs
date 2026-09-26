@@ -1,7 +1,8 @@
 // The window: the guide's five steps as the five pages of a plain Windows wizard, in the guide's words.
 // What each page shows is what codex_compat_report.py answered; nothing here decides what a report holds,
 // whether a login or a file will do, or what is sent. The window adds two things of its own, both to hold
-// the person to what they were shown: the SHA-256 of the bytes it shows, which pins the send, and a
+// the person to what they were shown: the SHA-256 of the bytes it shows and the writes it lists, which
+// pin the send (`submit --sha256 ... --write ...`: the script sends exactly those, or nothing), and a
 // question asked once more, whose default answer is no, before anything is written to GitHub.
 //
 // C# 5 only: this is compiled by the in-box csc (tools/make_exe.py).
@@ -40,6 +41,9 @@ namespace CodexCompatReporter
         internal const string Mismatch = "The file changed after it was shown here, so nothing more is done with what " +
                                          "was shown. It is shown again below as it is now: read it again, then choose Next.";
         internal const string Opened = "The pull request is open:";
+        internal const string IfClosed = "Close, and nothing is sent: the report stays here, yours to send or delete:";
+        internal const string Again = "Back, then Next, reads the file again and asks GitHub once more what sending " +
+                                      "would write.";
         // The only addresses the window opens: the project's page, and a pull request on it.
         internal const string ProjectPage = "https://github.com/songyb111-gachon/codex-auto-resume-windows";
         internal const string PullRequest = @"^https://github\.com/songyb111-gachon/codex-auto-resume-windows/pull/[0-9]+$";
@@ -124,7 +128,9 @@ namespace CodexCompatReporter
             status.TabIndex = 2;
             back = Push("back", "< &Back", "Back", 3);
             next = Push("next", "&Next >", "Next", 4);
-            send = Push("send", "&Send...", "Send", 5);
+            // No access key: while a button has the focus, WinForms clicks the button whose access key is
+            // typed even without Alt, and one stray S must not start a send.
+            send = Push("send", "Send...", "Send", 5);
             close = Push("close", "&Close", "Close", 6);
             Controls.Add(title);
             Controls.Add(stack);
@@ -482,21 +488,42 @@ namespace CodexCompatReporter
             }
         }
 
-        // The whole file as text, every byte of it to be seen: a control character an edit control would
-        // hide, or stop at, is shown as its Unicode picture instead.
+        // The whole file as text, every character of it to be seen. The reporter writes a report in printable
+        // ASCII alone (JSON with ensure_ascii), so any other character is an edit, and an edit control would
+        // hide it, stop at it or draw it as nothing: a control character, a zero-width space or joiner, a
+        // byte order mark, a mark that turns the text's direction. Each is shown instead: a control
+        // character as its Unicode picture - CR too, so a line that ends in CR LF is told from one that ends
+        // in LF - DEL as its own, and every other character outside printable ASCII as U+XXXX in
+        // guillemets, which the reporter never writes either. Tab and LF are shown as they are.
         internal static string Showable(byte[] bytes)
         {
             string text = new UTF8Encoding(false, false).GetString(bytes);
             StringBuilder shown = new StringBuilder(text.Length);
-            foreach (char c in text)
+            for (int i = 0; i < text.Length; i++)
             {
-                if (c == '\t' || c == '\n' || c == '\r' || (c >= ' ' && c != '\u007f'))
+                char c = text[i];
+                if (c == '\t' || c == '\n' || (c >= ' ' && c < '\u007f'))
                 {
                     shown.Append(c);
                 }
+                else if (c < ' ')
+                {
+                    shown.Append((char)(0x2400 + c));
+                }
+                else if (c == '\u007f')
+                {
+                    shown.Append('\u2421');
+                }
                 else
                 {
-                    shown.Append(c == '\u007f' ? '\u2421' : (char)(0x2400 + c));
+                    int point = c;
+                    if (char.IsHighSurrogate(c) && i + 1 < text.Length && char.IsLowSurrogate(text[i + 1]))
+                    {
+                        point = char.ConvertToUtf32(c, text[i + 1]);
+                        i++;
+                    }
+                    shown.Append('\u00ab').Append("U+").Append(point.ToString("X4", CultureInfo.InvariantCulture))
+                         .Append('\u00bb');
                 }
             }
             return shown.ToString();
@@ -589,9 +616,16 @@ namespace CodexCompatReporter
                 }
             }
             sending = true;
-            Ask("Sending the report to GitHub...",
-                new string[] { "submit", report.Str("path"), "--login", login, "--sha256", shownSha, "--yes", "--json" },
-                delegate(Answer answer)
+            List<string> arguments = new List<string>(new string[] { "submit", report.Str("path"), "--login", login,
+                                                                     "--sha256", shownSha });
+            // The writes this page listed, given back: the script writes exactly these, or nothing.
+            foreach (string write in plan.Strings("writes"))
+            {
+                arguments.Add("--write=" + write);
+            }
+            arguments.Add("--yes");
+            arguments.Add("--json");
+            Ask("Sending the report to GitHub...", arguments.ToArray(), delegate(Answer answer)
             {
                 haveRead = false;
                 if (answer.Ok)
@@ -600,6 +634,9 @@ namespace CodexCompatReporter
                 }
                 else
                 {
+                    // What was listed is no longer what sending would write - after a send refused half-way
+                    // least of all - so Send goes with it: the list is asked for again, and read again.
+                    plan = null;
                     Refuse(answer.Refused, answer);
                 }
                 Build();
@@ -673,12 +710,10 @@ namespace CodexCompatReporter
             return stack.Add(area);
         }
 
-        TextBox PathBox(string name, string path, string accessible)
+        // A path, whole: it breaks where the line ends, however long it is.
+        TextArea PathBox(string name, string path, string accessible)
         {
-            TextBox box = new TextBox();
-            box.Name = name;
-            box.ReadOnly = true;
-            box.Text = path ?? "";
+            TextArea box = new TextArea(name, path ?? "", true, true);
             box.AccessibleName = accessible;
             return stack.Add(box);
         }
@@ -794,9 +829,18 @@ namespace CodexCompatReporter
         void BuildRead()
         {
             string path = report.Str("path");
+            // Why the page is still here, first, where it is seen and read out: the page opens at its top.
+            if (mismatch != null)
+            {
+                focusOn = Said("mismatch", mismatch, "The file changed after it was shown");
+            }
+            if (stepRefused != null)
+            {
+                focusOn = Said("refused", stepRefused, "Why it cannot be sent");
+            }
             Words("short", Short);
             PathBox("path", path, "The report file");
-            Action("notepad", "Open in &Notepad", "Open the report in Notepad", delegate { OpenInNotepad(path); });
+            Action("notepad", "&Open in Notepad", "Open the report in Notepad", delegate { OpenInNotepad(path); });
             if (readRefused != null)
             {
                 Said("unreadable", readRefused, "Why the report cannot be shown");
@@ -813,14 +857,6 @@ namespace CodexCompatReporter
                 {
                     Said("changed", Changed, "The file has changed since it was written");
                 }
-            }
-            if (mismatch != null)
-            {
-                Said("mismatch", mismatch, "The file changed after it was shown");
-            }
-            if (stepRefused != null)
-            {
-                Said("refused", stepRefused, "Why it cannot be sent");
             }
         }
 
@@ -850,7 +886,15 @@ namespace CodexCompatReporter
                 BuildWeb();
                 return;
             }
-            if (plan != null)
+            if (sendRefused != null)
+            {
+                // Why nothing was sent, or what was, first, where it is seen and read out.
+                focusOn = Said("refused", sendRefused, "Why it was not sent");
+                Words("stays", sendKept ? Stays : Unsent);
+                PathBox("path", report.Str("path"), "The report file");
+                Words("again", Again);
+            }
+            else if (plan != null)
             {
                 focusOn = Listing("checked", Joined(plan.Strings("checked")), "What was checked, and where it would go");
                 Said("sending", plan.Str("sending") ?? "", "What sending writes to GitHub");
@@ -872,11 +916,7 @@ namespace CodexCompatReporter
                     UpdateButtons();
                 };
                 stack.Add(read, true);
-            }
-            if (sendRefused != null)
-            {
-                Said("refused", sendRefused, "Why it was not sent");
-                Words("stays", sendKept ? Stays : Unsent);
+                Words("if_closed", IfClosed);
                 PathBox("path", report.Str("path"), "The report file");
             }
         }
@@ -891,7 +931,7 @@ namespace CodexCompatReporter
             Said("stays_here", web.Str("stays") ?? "", "Where the report is");
             string path = web.Str("file");
             PathBox("path", path, "The report file");
-            Action("notepad", "Open in &Notepad", "Open the report in Notepad", delegate { OpenInNotepad(path); });
+            Action("notepad", "&Open in Notepad", "Open the report in Notepad", delegate { OpenInNotepad(path); });
             Said("intro", web.Str("intro") ?? "", "How to send it on the web");
             number = 0;
             foreach (JsonObject step in web.Objects("steps"))

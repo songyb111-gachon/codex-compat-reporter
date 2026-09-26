@@ -3,7 +3,7 @@
     python codex_compat_report.py guide
     python codex_compat_report.py status
     python codex_compat_report.py report --login <your GitHub login> [--codex-version V] [--out FILE] [--force | --keep] [--json]
-    python codex_compat_report.py submit [FILE] [--login L] [--sha256 HEX] [--dry-run | --yes] [--json]
+    python codex_compat_report.py submit [FILE] [--login L] [--sha256 HEX] [--write TEXT ...] [--dry-run | --yes] [--json]
     python codex_compat_report.py survey [--json]
     python codex_compat_report.py login LOGIN [--json]
     python codex_compat_report.py web-steps FILE [--login L] [--json]
@@ -138,6 +138,9 @@ SENDING = "Sending writes to GitHub, as %s:"
 # What submit says when the project's folder for reports is not there yet, and it exits with 3.
 NOT_OPEN = ("The project is not taking reports yet: %s does not exist on %s's main." % (COMMUNITY, REPO),
             "Nothing was sent. Keep the file, and send it when that folder appears.")
+# What submit says when what sending would write is no longer the list the person was shown (--write, and
+# the guide's `send`); the guide adds how to be asked again.
+CHANGED = "What sending would write to GitHub changed while you were asked, so nothing was sent."
 WORD = re.compile(r"\A[A-Za-z0-9_.\-]{1,40}\Z")
 TIME = "%Y-%m-%dT%H:%M:%SZ"
 
@@ -194,6 +197,10 @@ class Refused(Exception):
     """Something this tool will not guess at. The message says what to do."""
     exit_code = EXIT_REFUSED
     written = ()                # what submit --yes had already written to GitHub when it was refused
+
+
+class Changed(Refused):
+    """What sending would write is no longer the list the person was shown: CHANGED, and nothing written."""
 
 
 class NotOpen(Refused):
@@ -1107,10 +1114,11 @@ class Ready:
                 "one public pull request on %s - a pull request cannot be unpublished" % REPO]
 
 
-def prepare_submit(path, *, login=None, sha256=None, say=print):
+def prepare_submit(path, *, login=None, sha256=None, writes=None, say=print):
     """Everything submit does before its first write, said through `say`: the file read once and held
     to the project's rules, and GitHub asked its read-only questions. A Ready, or None when the project
-    is not taking reports yet. `submit` and the guide's send both start here."""
+    is not taking reports yet. `submit` and the guide's send both start here. Given `writes`, the list of
+    writes the person was shown, what sending would write now must be that list, or it is refused."""
     raw = read_report(path)
     report, problems = validate(raw)
     if problems:
@@ -1206,9 +1214,12 @@ def prepare_submit(path, *, login=None, sha256=None, say=print):
                        "a look at the project's main")
     if not re.fullmatch(r"[0-9a-f]{40}", base):
         raise Refused("GitHub did not give the project's main as a commit: %r" % base[:80])
-    return Ready(path=path, raw=raw, digest=digest, report=report, login=login, fork=fork, branch=branch,
-                 target=target, base=base, has_fork=has_fork, has_branch=has_branch, github=github,
-                 url=None, written=[])
+    ready = Ready(path=path, raw=raw, digest=digest, report=report, login=login, fork=fork, branch=branch,
+                  target=target, base=base, has_fork=has_fork, has_branch=has_branch, github=github,
+                  url=None, written=[])
+    if writes is not None and list(writes) != ready.writes():
+        raise Changed(CHANGED)
+    return ready
 
 
 def send(ready: Ready, say=print) -> str:
@@ -1232,7 +1243,7 @@ def send(ready: Ready, say=print) -> str:
     return url
 
 
-def submission(path, *, login=None, sha256=None, dry_run=False, yes=False, say=print):
+def submission(path, *, login=None, sha256=None, writes=None, dry_run=False, yes=False, say=print):
     """`submit`, said through `say`: the one source of its words and of `submit --json`. The Ready it went
     on with - sent when `yes` - or None when the project is not taking reports yet (exit code 3). What
     it found before its first write, the lines the guide shows above what sending writes, is kept as
@@ -1242,7 +1253,7 @@ def submission(path, *, login=None, sha256=None, dry_run=False, yes=False, say=p
     def check(text):
         checked.append(text)
         say(text)
-    ready = prepare_submit(path, login=login, sha256=sha256, say=check)
+    ready = prepare_submit(path, login=login, sha256=sha256, writes=writes, say=check)
     if ready is None:
         return None
     ready.checked = checked
@@ -1262,7 +1273,7 @@ def submission(path, *, login=None, sha256=None, dry_run=False, yes=False, say=p
 
 def cmd_submit(arguments) -> int:
     ready = submission(pick_file(arguments.file), login=arguments.login, sha256=arguments.sha256,
-                       dry_run=arguments.dry_run, yes=arguments.yes)
+                       writes=arguments.writes, dry_run=arguments.dry_run, yes=arguments.yes)
     return EXIT_NOT_OPEN if ready is None else EXIT_OK
 
 
@@ -1553,14 +1564,15 @@ class Guide:
             raise Stop()
         self.sending = True
         # The same questions again, now, and the file held to the SHA-256 just shown: what is sent is
-        # what was read, and what is written to GitHub is what was listed.
-        again = prepare_submit(target, login=login, sha256=digest, say=lambda text="": None)
+        # what was read, and what is written to GitHub is what was listed - as `submit --write` holds it.
+        try:
+            again = prepare_submit(target, login=login, sha256=digest, writes=ready.writes(),
+                                   say=lambda text="": None)
+        except Changed:
+            raise Refused(CHANGED + " Run the guide again to be asked about what it is now.") from None
         if again is None:
             print("  The project stopped taking reports while you were asked. The report stays here: %s" % target)
             return EXIT_NOT_OPEN
-        if again.writes() != ready.writes():
-            raise Refused("What sending would write to GitHub changed while you were asked, so nothing was "
-                          "sent. Run the guide again to be asked about what it is now.")
         send(again, say=indented)
         return EXIT_OK
 
@@ -1618,7 +1630,7 @@ def json_report(arguments) -> dict:
 def json_submit(arguments) -> dict:
     said = []
     ready = submission(pick_file(arguments.file), login=arguments.login, sha256=arguments.sha256,
-                       dry_run=arguments.dry_run, yes=arguments.yes, say=said.append)
+                       writes=arguments.writes, dry_run=arguments.dry_run, yes=arguments.yes, say=said.append)
     if ready is None:
         raise NotOpen("\n".join(NOT_OPEN))
     return {"file": str(ready.path), "bytes": len(ready.raw), "sha256": ready.digest,
@@ -1715,6 +1727,9 @@ def main(argv=None) -> int:
     submit.add_argument("--login", default=None, help="refuse unless the file is filed under this login")
     submit.add_argument("--sha256", default=None, metavar="HEX",
                         help="refuse unless the file's SHA-256 is this one, as `report` printed it")
+    submit.add_argument("--write", dest="writes", action="append", default=None, metavar="TEXT",
+                        help="once for each write --dry-run listed, in its order: refuse unless sending would "
+                             "write exactly those")
     either = submit.add_mutually_exclusive_group()
     either.add_argument("--dry-run", action="store_true", help="check everything, say what it would write, and stop")
     either.add_argument("--yes", action="store_true", help="yes, open the public pull request")

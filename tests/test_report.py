@@ -1337,7 +1337,7 @@ class GuideTests(Guided):
             return "send"
         code, said, gh, _asked, _shown = self.guide("", "", "", fork_appears)
         self.assertEqual(code, 2)
-        self.assertIn("changed while you were asked", said)
+        self.assertIn("\n%s Run the guide again to be asked about what it is now.\n" % reporter.CHANGED, said)
         self.assertEqual(gh.writes(), [])
 
     @unittest.skipUnless(PRODUCT_READER.is_file(), "the product's checkout is not beside this one")
@@ -1592,6 +1592,31 @@ class JsonSubmitTests(Sending):
         self.assertEqual(self.uploaded(gh), self.reviewed)
         _gh, code, out, _err = self.submit(str(self.file), "--sha256", self.digest(), "--yes")
         self.assertEqual((code, found["lines"]), (0, out.splitlines()))
+
+    def test_write_holds_the_send_to_the_writes_the_person_was_shown(self):
+        """A window lists the writes of a --dry-run and sends later: given them back with --write, --yes
+        writes exactly those or nothing, as the guide's `send` does - a fork or a branch that came or went
+        in between is refused, and nothing is written."""
+        digest = self.digest()
+        for shown, now in (({}, {"fork": True}), ({}, {"fork": True, "branch": True}),
+                           ({"fork": True, "branch": True}, {}), ({"fork": True}, {"fork": True, "branch": True})):
+            with self.subTest(shown=shown, now=now):
+                _gh, _code, plan, _err = self.submit_json(str(self.file), "--sha256", digest, "--dry-run", **shown)
+                pinned = ["--write=" + write for write in plan["writes"]]
+                gh, code, found, _err = self.submit_json(str(self.file), "--sha256", digest, *pinned, "--yes", **now)
+                self.assertEqual((code, gh.writes()), (2, []))
+                self.assertEqual(found, {"ok": False, "refused": reporter.CHANGED, "exit": 2})
+                self.assertEqual(found, refusal(*self.submit(str(self.file), "--sha256", digest, *pinned, "--yes",
+                                                             **now)[1::2]))
+                gh, code, found, _err = self.submit_json(str(self.file), "--sha256", digest, *pinned, "--yes", **shown)
+                self.assertEqual((code, found["writes"], found["url"]), (0, plan["writes"], "https://github.com/%s/pull/7"
+                                                                        % REPO))
+                self.assertEqual(self.uploaded(gh), self.reviewed)
+        # One write left out, or the list in another order, is not the list that was shown.
+        _gh, _code, plan, _err = self.submit_json(str(self.file), "--dry-run")
+        for writes in (plan["writes"][:-1], plan["writes"][::-1]):
+            gh, code, found, _err = self.submit_json(str(self.file), *["--write=" + write for write in writes], "--yes")
+            self.assertEqual((code, found["refused"], gh.writes()), (2, reporter.CHANGED, []))
 
     def test_the_sha256_still_pins_the_bytes(self):
         digest = self.digest()

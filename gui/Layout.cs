@@ -78,6 +78,28 @@ namespace CodexCompatReporter
         }
     }
 
+    // The one door to Windows the window needs beyond WinForms: a message to a control of its own.
+    internal static class Native
+    {
+        const int EM_GETMARGINS = 0x00D4;
+
+        [DllImport("user32.dll")]
+        public static extern IntPtr SendMessage(IntPtr window, int message, IntPtr wParam, IntPtr lParam);
+
+        // For --describe: whether a one-line edit control shows the whole of its text, inside its margins.
+        public static bool WholeOnOneLine(TextBox box)
+        {
+            if (!box.IsHandleCreated)
+            {
+                return false;
+            }
+            int margins = Native.SendMessage(box.Handle, EM_GETMARGINS, IntPtr.Zero, IntPtr.Zero).ToInt32();
+            int wide = TextRenderer.MeasureText(box.Text, box.Font, new Size(int.MaxValue, int.MaxValue),
+                                                TextFormatFlags.NoPadding | TextFormatFlags.SingleLine).Width;
+            return wide + (margins & 0xFFFF) + ((margins >> 16) & 0xFFFF) <= box.ClientSize.Width;
+        }
+    }
+
     // A row whose height follows its content at the width it is given.
     internal interface IMeasured
     {
@@ -91,11 +113,9 @@ namespace CodexCompatReporter
     internal sealed class TextArea : TextBox, IMeasured
     {
         const int EM_GETLINECOUNT = 0x00BA;
+        const int EM_GETFIRSTVISIBLELINE = 0x00CE;
         const int EM_POSFROMCHAR = 0x00D6;
         readonly bool grows;
-
-        [DllImport("user32.dll")]
-        static extern IntPtr SendMessage(IntPtr window, int message, IntPtr wParam, IntPtr lParam);
 
         public TextArea(string name, string text, bool bordered, bool grows)
         {
@@ -140,7 +160,13 @@ namespace CodexCompatReporter
 
         public int LineCount()
         {
-            return Math.Max(1, SendMessage(Handle, EM_GETLINECOUNT, IntPtr.Zero, IntPtr.Zero).ToInt32());
+            return Math.Max(1, Native.SendMessage(Handle, EM_GETLINECOUNT, IntPtr.Zero, IntPtr.Zero).ToInt32());
+        }
+
+        // For the pictures: the first line in view, of one that scrolls.
+        public int FirstLine()
+        {
+            return Native.SendMessage(Handle, EM_GETFIRSTVISIBLELINE, IntPtr.Zero, IntPtr.Zero).ToInt32();
         }
 
         public int HeightAt(int width)
@@ -186,17 +212,18 @@ namespace CodexCompatReporter
             {
                 return true;
             }
-            int where = SendMessage(Handle, EM_POSFROMCHAR, (IntPtr)(TextLength - 1), IntPtr.Zero).ToInt32();
+            int where = Native.SendMessage(Handle, EM_POSFROMCHAR, (IntPtr)(TextLength - 1), IntPtr.Zero).ToInt32();
             int top = (short)((where >> 16) & 0xFFFF);
             return top >= 0 && top + LineHeight() <= ClientSize.Height;
         }
     }
 
-    // A value to type on GitHub, shown so it can be selected, with a button that copies it.
+    // A value to type on GitHub, shown whole so it can be read and selected - it breaks where the line
+    // ends, as a path does - with a button beside it that copies it.
     internal sealed class CopyRow : Panel, IMeasured
     {
         readonly Ui ui;
-        public readonly TextBox Value;
+        public readonly TextArea Value;
         public readonly Button Copy;
 
         public CopyRow(Ui ui, string name, string value, string accessibleName)
@@ -204,10 +231,7 @@ namespace CodexCompatReporter
             this.ui = ui;
             Name = name;
             AccessibleName = accessibleName;
-            Value = new TextBox();
-            Value.Name = name + "_value";
-            Value.ReadOnly = true;
-            Value.Text = value;
+            Value = new TextArea(name + "_value", value, true, true);
             Value.AccessibleName = accessibleName;
             Value.TabIndex = 0;
             Copy = new Button();
@@ -232,18 +256,23 @@ namespace CodexCompatReporter
             Controls.Add(Copy);
         }
 
+        int BoxWidth(int width)
+        {
+            return Math.Max(1, width - ui.ButtonSize(Copy).Width - ui.Px(6));
+        }
+
         public int HeightAt(int width)
         {
-            return Math.Max(Value.PreferredHeight, ui.ButtonSize(Copy).Height);
+            return Math.Max(Value.HeightAt(BoxWidth(width)), ui.ButtonSize(Copy).Height);
         }
 
         protected override void OnLayout(LayoutEventArgs e)
         {
             Size button = ui.ButtonSize(Copy);
-            int gap = ui.Px(6);
             Copy.SetBounds(Math.Max(0, ClientSize.Width - button.Width), 0, button.Width, button.Height);
-            int boxWidth = Math.Max(1, ClientSize.Width - button.Width - gap);
-            Value.SetBounds(0, Math.Max(0, (button.Height - Value.PreferredHeight) / 2), boxWidth, Value.PreferredHeight);
+            int boxWidth = BoxWidth(ClientSize.Width);
+            int tall = Value.HeightAt(boxWidth);
+            Value.SetBounds(0, Math.Max(0, (button.Height - tall) / 2), boxWidth, tall);
             base.OnLayout(e);
         }
     }

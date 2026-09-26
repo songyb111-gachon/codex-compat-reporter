@@ -51,8 +51,8 @@ pictures below show: the login ExampleUser, and records that belong to no one - 
 steps in the same words, one question at a time, for anyone who would rather answer in a console than
 click through a window.
 
-1. Double-click `Report.cmd` in the folder that makes. It runs on the Python that Codex Auto Resume
-   installed with itself, so there is nothing more to install.
+1. Double-click `Report.cmd` in the folder the ZIP was unzipped into. It runs on the Python that Codex
+   Auto Resume installed with itself, so there is nothing more to install.
 2. Answer its questions. It shows what this machine can show, asks for your GitHub login, writes the
    report and opens it in Notepad. Read it: it is short.
 3. Type `send` to send it. Anything else sends nothing, and the file stays where it was written.
@@ -146,6 +146,7 @@ machine.
 | `submit --yes` | Yes: writes to GitHub as listed below and opens the pull request. |
 | `submit --login LOGIN` | Refuses unless the file is filed under LOGIN. |
 | `submit --sha256 HEX` | Refuses unless the file's SHA-256 is HEX, as `report` printed it - a way to be sure the file is still the one you read. |
+| `submit --write TEXT` | Given once for each write `--dry-run` listed, in its order: refuses unless sending would write exactly those - a way to be sure what is written to GitHub is what you were shown. `Report.exe` sends with it. |
 | `--version`, `--help` | The tool's own version, and help. They read nothing. |
 
 ### Exit codes
@@ -242,7 +243,9 @@ exactly as `submit --yes` does, with the SHA-256 of the file pinned as it was wh
 file changed since then, or a list of writes that is no longer the one you were shown, is refused
 and nothing is sent. `Report.exe` asks the same two when it fills in your login, lists the writes on
 its last page from a `--dry-run`, and on Send - after I have read it, and one more question whose
-default answer is Cancel - runs `submit --yes` with the SHA-256 of the bytes it showed you pinned.
+default answer is Cancel - runs `submit --yes` with the SHA-256 of the bytes it showed you and the
+writes it listed pinned (`--sha256` and `--write`): there too a changed file, or a list of writes that
+is no longer the one shown, is refused and nothing is sent.
 
 The name in the project is always `codex-cli-<version>.json` under your login, whatever you called
 the file on your machine. There is one report per GitHub login per Codex version, and one open

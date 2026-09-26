@@ -8,7 +8,12 @@ and nothing to install, for whoever builds it or runs it. Codex Auto Resume buil
 same way (its build/make_gui.ps1). The sources are compiled in the one order SOURCES gives, with a
 version resource made from codex_compat_report.py's __version__ and LICENSE, and normalize_pe.py then
 fixes the two fields the compiler stamps anew on every run, so the same sources give the same bytes and
-anyone can rebuild Report.exe and compare.
+anyone can rebuild Report.exe and compare. The manifest is embedded byte for byte, so the compiler is
+given it with CRLF line endings, whatever the checkout wrote: one with LF would build other bytes.
+
+Report.exe names .NET Framework 4.8 as its target (TargetFramework, which the in-box compiler does not
+add by itself): without it .NET runs it as a .NET 4.0 program, and WinForms leaves off what it fixed
+since - the colours of High Contrast, what a screen reader is told, Ctrl+A in a box of several lines.
 
 Report.exe is a build output: .gitignore keeps it out of the repository.
 """
@@ -66,6 +71,7 @@ def version_source(root: pathlib.Path = ROOT) -> str:
     return "\r\n".join([
         "// Made by tools/make_exe.py from codex_compat_report.py and LICENSE. Do not edit.",
         "using System.Reflection;",
+        "using System.Runtime.Versioning;",
         '[assembly: AssemblyTitle("codex-compat-reporter")]',
         '[assembly: AssemblyDescription("codex-compat-reporter: a report of how Codex Auto Resume behaved on this machine")]',
         '[assembly: AssemblyProduct("codex-compat-reporter")]',
@@ -74,8 +80,14 @@ def version_source(root: pathlib.Path = ROOT) -> str:
         '[assembly: AssemblyVersion("%s.0")]' % version,
         '[assembly: AssemblyFileVersion("%s.0")]' % version,
         '[assembly: AssemblyInformationalVersion("%s")]' % version,
+        '[assembly: TargetFramework(".NETFramework,Version=v4.8", FrameworkDisplayName = ".NET Framework 4.8")]',
         "",
     ])
+
+
+def manifest_bytes(root: pathlib.Path = ROOT) -> bytes:
+    """gui/Report.manifest as it is embedded: with CRLF line endings, however it was checked out."""
+    return (root / MANIFEST).read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
 
 
 def said(raw: bytes) -> str:
@@ -90,7 +102,7 @@ def build(out: pathlib.Path, root: pathlib.Path = ROOT) -> pathlib.Path:
     """Compile Report.exe into `out` and make it reproducible; its path."""
     csc = compiler()
     if csc is None:
-        raise SystemExit("The C# compiler of .NET Framework 4.8 was not found (%%WINDIR%%\\Microsoft.NET\\Framework64"
+        raise SystemExit("The C# compiler of .NET Framework 4.8 was not found (%WINDIR%\\Microsoft.NET\\Framework64"
                          "\\v4.0.30319\\csc.exe).")
     out = pathlib.Path(out)
     out.mkdir(parents=True, exist_ok=True)
@@ -98,8 +110,10 @@ def build(out: pathlib.Path, root: pathlib.Path = ROOT) -> pathlib.Path:
     with tempfile.TemporaryDirectory(prefix="report-exe-") as work:
         info = pathlib.Path(work) / "Report.VersionInfo.cs"
         info.write_bytes(version_source(root).encode("ascii"))
+        manifest = pathlib.Path(work) / "Report.manifest"
+        manifest.write_bytes(manifest_bytes(root))
         arguments = [str(csc), "/nologo", "/utf8output", "/target:winexe", "/platform:anycpu", "/optimize+",
-                     "/warn:4", "/warnaserror+", "/out:" + str(exe), "/win32manifest:" + str(root / MANIFEST)]
+                     "/warn:4", "/warnaserror+", "/out:" + str(exe), "/win32manifest:" + str(manifest)]
         arguments += ["/reference:" + reference for reference in REFERENCES]
         arguments += [str(root / source) for source in SOURCES] + [str(info)]
         done = subprocess.run(arguments, capture_output=True, stdin=subprocess.DEVNULL,
