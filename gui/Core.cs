@@ -135,6 +135,7 @@ namespace CodexCompatReporter
         const int StoreStandIn = 9009;
 
         readonly string folder;         // where the report is written: the current folder, as for Report.cmd
+        readonly string here;           // this program's own folder, where the script must be
         readonly string script;
         string python;
         string flags;
@@ -143,7 +144,9 @@ namespace CodexCompatReporter
         public LiveCore()
         {
             folder = Environment.CurrentDirectory;
-            string here = Path.GetDirectoryName(Application.ExecutablePath);
+            // The file's own path, as Windows loaded it. (WinForms' ExecutablePath is read back from a URI
+            // that decodes %XX, so in a folder called reporter%41x it names reporterAx, a folder beside it.)
+            here = Path.GetDirectoryName(typeof(LiveCore).Assembly.Location);
             script = Path.Combine(here, Script);
             if (!File.Exists(script))
             {
@@ -163,6 +166,17 @@ namespace CodexCompatReporter
         public string Missing
         {
             get { return missing; }
+        }
+
+        // For Report.exe --where: what this machine would give the window, found as above; nothing started.
+        internal Ordered Where()
+        {
+            return new Ordered()
+                .Add("here", here)
+                .Add("script", script)
+                .Add("python", python)
+                .Add("flags", flags)
+                .Add("missing", missing);
         }
 
         static string Expand(string place, string entry)
@@ -363,6 +377,8 @@ namespace CodexCompatReporter
     internal sealed class FixtureCore : ICore
     {
         readonly JsonObject fixture;
+        // Each run asked of it, its arguments as the window gave them, for --describe.
+        public readonly List<string[]> Asked = new List<string[]>();
 
         public FixtureCore(JsonObject fixture)
         {
@@ -381,6 +397,7 @@ namespace CodexCompatReporter
 
         public void Run(Control window, string[] arguments, Action<Answer> done)
         {
+            Asked.Add((string[])arguments.Clone());
             string key = arguments[0];
             if (key == "web-steps")
             {

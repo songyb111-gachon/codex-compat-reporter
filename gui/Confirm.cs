@@ -1,5 +1,8 @@
 // The question asked once more before anything is written to GitHub: where it goes, as whom, and the
-// SHA-256 of exactly what goes. Its default button is Cancel, so Enter, Esc and closing it all send nothing.
+// SHA-256 of exactly what goes. Its default button is Cancel, so Enter, Esc and closing it all send nothing,
+// and Send has no access key: while a button has the focus, WinForms clicks the button whose access key is
+// typed even without Alt, and one stray S must not send. Send is chosen with the mouse, or with Tab and
+// then Enter or Space on it.
 //
 // C# 5 only: this is compiled by the in-box csc (tools/make_exe.py).
 using System;
@@ -48,7 +51,7 @@ namespace CodexCompatReporter
             details.TabIndex = 1;
             Send = new Button();
             Send.Name = "send";
-            Send.Text = "&Send";
+            Send.Text = "Send";
             Send.AccessibleName = "Send";
             Send.UseVisualStyleBackColor = true;
             Send.AutoSizeMode = AutoSizeMode.GrowAndShrink;

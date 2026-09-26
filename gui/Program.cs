@@ -5,14 +5,19 @@
 //
 //   Report.exe --fixture <json> --describe <1-5 | confirm> [--scale 1.25|1.5|2] [--size min] [--have-read]
 //       prints, as JSON, every control the page shows: its name, text, bounds, preferred size, whether its
-//       text fits, tab order, accessible name and whether it is enabled. No window is shown. Given lists -
+//       text fits, tab order, accessible name, access key and whether it is enabled - and each run of the
+//       reporter the window asked for on the way, its arguments as given. No window is shown. Given lists -
 //       --describe 1,2,3 --scale 1,1.5 --size default,min - it prints a JSON array, one object for each.
 //   Report.exe --fixture <json> --render <1-5 | confirm> --out <png> [--scale ...] [--size min] [--have-read]
-//       draws that page off-screen into a PNG.
+//       draws that page off-screen into a PNG, with the scroll bar of each box that scrolls.
 //
 // Two more, for the README's pictures (tools/make_window_pictures.py): --font <family> draws in that
 // family, at the system font's size, as a Windows whose message font it is would - Segoe UI, Windows'
 // own, where this machine's is another; --end shows the page scrolled to its end, as after reading down it.
+//
+// And one that reads this machine, to say where the window would take the reporter from, and starts
+// nothing: Report.exe --where prints, as JSON, the folder it counts as its own, the script it would run,
+// the Python it would run it with, and what it would say is missing.
 //
 // C# 5 only: this is compiled by the in-box csc (tools/make_exe.py).
 using System;
@@ -24,6 +29,7 @@ using System.IO;
 using System.Reflection;
 using System.Text;
 using System.Windows.Forms;
+using System.Windows.Forms.VisualStyles;
 
 namespace CodexCompatReporter
 {
@@ -51,16 +57,19 @@ namespace CodexCompatReporter
         }
     }
 
-    // Where the window is after it was driven: the page it is at, and in which of that page's states.
+    // Where the window is after it was driven: the page it is at, in which of that page's states, and
+    // what it asked the reporter on the way, each run's arguments as the window gave them.
     internal sealed class Where
     {
         public readonly string State;
         public readonly int At;
+        public readonly List<string[]> Asked;
 
-        public Where(string state, int at)
+        public Where(string state, int at, List<string[]> asked)
         {
             State = state;
             At = at;
+            Asked = asked;
         }
     }
 
@@ -71,6 +80,7 @@ namespace CodexCompatReporter
                              "[--end]\n" +
                              "--describe takes lists too - 1,2,3 and --scale 1,2 and --size default,min - and then " +
                              "prints a JSON array, one object for each page at each scale and size.\n" +
+                             "Report.exe --where: where it would take the reporter and Python from, as JSON.\n" +
                              "Without arguments it opens the window.";
 
         public static void Error(string text)
@@ -92,6 +102,11 @@ namespace CodexCompatReporter
 
         public static int Run(string[] arguments)
         {
+            if (arguments.Length == 1 && arguments[0] == "--where")
+            {
+                Write(Console.OpenStandardOutput(), Json.Write(new LiveCore().Where()) + "\n");
+                return 0;
+            }
             string fixturePath = null;
             string describe = null;
             string render = null;
@@ -221,7 +236,8 @@ namespace CodexCompatReporter
                          bool end)
         {
             Ui ui = Ui.ForScale(scale, family);
-            ReportForm wizard = new ReportForm(ui, new FixtureCore(fixture), true, Application.ProductVersion);
+            FixtureCore core = new FixtureCore(fixture);
+            ReportForm wizard = new ReportForm(ui, core, true, Application.ProductVersion);
             if (smallest)
             {
                 wizard.Size = wizard.MinimumSize;
@@ -238,12 +254,12 @@ namespace CodexCompatReporter
                     return null;
                 }
                 form = new ConfirmForm(ui, plan.Str("repository"), plan.Str("login"), sha256);
-                form.Tag = new Where("confirm", 5);
+                form.Tag = new Where("confirm", 5, core.Asked);
             }
             else
             {
                 wizard.Drive(int.Parse(page, CultureInfo.InvariantCulture), haveRead, fixture.Has("sent"));
-                form.Tag = new Where(wizard.State(), wizard.Page);
+                form.Tag = new Where(wizard.State(), wizard.Page, core.Asked);
             }
             Prepare(form);
             if (end)
@@ -328,6 +344,11 @@ namespace CodexCompatReporter
             List<object> controls = new List<object>();
             Walk(form, form, new List<int>(), new Rectangle(Point.Empty, form.ClientSize), controls);
             Control focused = form.ActiveControl;
+            List<object> asked = new List<object>();
+            foreach (string[] run in ((Where)form.Tag).Asked)
+            {
+                asked.Add(new List<object>(run));
+            }
             return new Ordered()
                 .Add("page", what)
                 .Add("state", ((Where)form.Tag).State)
@@ -340,6 +361,7 @@ namespace CodexCompatReporter
                 .Add("accept", form.AcceptButton is Control ? ((Control)form.AcceptButton).Name : null)
                 .Add("cancel", form.CancelButton is Control ? ((Control)form.CancelButton).Name : null)
                 .Add("focus", focused == null ? null : focused.Name)
+                .Add("asked", asked)
                 .Add("controls", controls);
         }
 
@@ -383,6 +405,7 @@ namespace CodexCompatReporter
                     .Add("checked", child is CheckBox ? (object)((CheckBox)child).Checked
                                     : child is RadioButton ? (object)((RadioButton)child).Checked : null)
                     .Add("accessible_name", child.AccessibleName)
+                    .Add("mnemonic", Mnemonic(child))
                     .Add("enabled", child.Enabled));
                 if (child.Controls.Count > 0)
                 {
@@ -393,9 +416,36 @@ namespace CodexCompatReporter
             }
         }
 
+        // The access key a control answers to, upper-cased: the character after a lone & in its text, where
+        // the control reads & so; null when it has none.
+        static string Mnemonic(Control control)
+        {
+            ButtonBase button = control as ButtonBase;
+            Label label = control as Label;
+            if (!(button != null ? button.UseMnemonic : label != null && label.UseMnemonic))
+            {
+                return null;
+            }
+            string text = control.Text ?? "";
+            for (int i = 0; i + 1 < text.Length; i++)
+            {
+                if (text[i] != '&')
+                {
+                    continue;
+                }
+                if (text[i + 1] == '&')
+                {
+                    i++;
+                    continue;
+                }
+                return text.Substring(i + 1, 1).ToUpperInvariant();
+            }
+            return null;
+        }
+
         // Whether a control's text is all inside it: for a label its wrapped size at its width, for a
         // button or a box to tick its one line, for an edit control every line of it or, where it
-        // scrolls, at least one.
+        // scrolls, at least one - and for a one-line edit control, its whole width too.
         static bool Fits(Control control, out Size preferred)
         {
             TextArea area = control as TextArea;
@@ -409,7 +459,7 @@ namespace CodexCompatReporter
             if (box != null)
             {
                 preferred = new Size(control.Width, box.PreferredHeight);
-                return control.Height >= box.PreferredHeight;
+                return control.Height >= box.PreferredHeight && Native.WholeOnOneLine(box);
             }
             if (control is ButtonBase)
             {
@@ -436,7 +486,92 @@ namespace CodexCompatReporter
                                                  form.ClientSize.Width, form.ClientSize.Height);
                 using (Bitmap page = whole.Clone(client, PixelFormat.Format24bppRgb))
                 {
+                    using (Graphics graphics = Graphics.FromImage(page))
+                    {
+                        ScrollBars(form, form, graphics, new Rectangle(Point.Empty, form.ClientSize));
+                    }
                     page.Save(output, ImageFormat.Png);
+                }
+            }
+        }
+
+        // An edit control draws its scroll bar on the screen only, never into a bitmap, which keeps a blank
+        // strip in its place: each box that scrolls has it drawn here, where the screen has it, in the
+        // system's style and at the line its text is scrolled to, so a picture shows the box holds more.
+        static void ScrollBars(Control parent, Form form, Graphics graphics, Rectangle clip)
+        {
+            foreach (Control child in parent.Controls)
+            {
+                if (!Shown(child))
+                {
+                    continue;
+                }
+                Point origin = form.PointToClient(parent.PointToScreen(child.Location));
+                Point inside = form.PointToClient(child.PointToScreen(Point.Empty));
+                TextArea area = child as TextArea;
+                if (area != null && !area.Grows)
+                {
+                    int border = inside.X - origin.X;
+                    int left = inside.X + child.ClientSize.Width;
+                    Rectangle bar = new Rectangle(left, inside.Y, origin.X + child.Width - border - left,
+                                                  child.ClientSize.Height);
+                    int shown = Math.Max(1, child.ClientSize.Height / area.LineHeight());
+                    graphics.SetClip(clip);
+                    ScrollBar(graphics, bar, area.LineCount(), shown, area.FirstLine());
+                    graphics.ResetClip();
+                }
+                if (child.Controls.Count > 0)
+                {
+                    ScrollBars(child, form, graphics, Rectangle.Intersect(clip, new Rectangle(inside, child.ClientSize)));
+                }
+            }
+        }
+
+        static void ScrollBar(Graphics graphics, Rectangle bar, int lines, int shown, int first)
+        {
+            if (bar.Width <= 0 || bar.Height <= 0)
+            {
+                return;
+            }
+            bool scrolls = lines > shown;
+            int arrow = Math.Min(SystemInformation.VerticalScrollBarArrowHeight, bar.Height / 2);
+            Rectangle up = new Rectangle(bar.X, bar.Y, bar.Width, arrow);
+            Rectangle down = new Rectangle(bar.X, bar.Bottom - arrow, bar.Width, arrow);
+            Rectangle track = new Rectangle(bar.X, up.Bottom, bar.Width, Math.Max(0, down.Top - up.Bottom));
+            Rectangle thumb = Rectangle.Empty;
+            if (scrolls && track.Height > 0)
+            {
+                int tall = Math.Min(track.Height, Math.Max(SystemInformation.VerticalScrollBarThumbHeight,
+                                                           track.Height * shown / lines));
+                int top = track.Y + (track.Height - tall) * Math.Min(first, lines - shown) / (lines - shown);
+                thumb = new Rectangle(bar.X, top, bar.Width, tall);
+            }
+            if (ScrollBarRenderer.IsSupported)
+            {
+                ScrollBarRenderer.DrawUpperVerticalTrack(graphics, track, scrolls ? ScrollBarState.Normal
+                                                                                  : ScrollBarState.Disabled);
+                ScrollBarRenderer.DrawArrowButton(graphics, up, scrolls ? ScrollBarArrowButtonState.UpNormal
+                                                                        : ScrollBarArrowButtonState.UpDisabled);
+                ScrollBarRenderer.DrawArrowButton(graphics, down, scrolls ? ScrollBarArrowButtonState.DownNormal
+                                                                          : ScrollBarArrowButtonState.DownDisabled);
+                if (!thumb.IsEmpty)
+                {
+                    ScrollBarRenderer.DrawVerticalThumb(graphics, thumb, ScrollBarState.Normal);
+                    ScrollBarRenderer.DrawVerticalThumbGrip(graphics, thumb, ScrollBarState.Normal);
+                }
+            }
+            else
+            {
+                using (Brush brush = new SolidBrush(SystemColors.ScrollBar))
+                {
+                    graphics.FillRectangle(brush, track);
+                }
+                ButtonState state = scrolls ? ButtonState.Normal : ButtonState.Inactive;
+                ControlPaint.DrawScrollButton(graphics, up, ScrollButton.Up, state);
+                ControlPaint.DrawScrollButton(graphics, down, ScrollButton.Down, state);
+                if (!thumb.IsEmpty)
+                {
+                    ControlPaint.DrawButton(graphics, thumb, ButtonState.Normal);
                 }
             }
         }
