@@ -99,9 +99,12 @@ class Console:
         return answer
 
 
-def run(answers, *, gh: bool):
-    """(what the console shows, the temporary places no frame may name) for one run of the guide."""
-    console = Console(answers)
+@contextlib.contextmanager
+def made_up(*, gh: bool):
+    """The made-up machine every picture shows, the window's included (tools/make_window_pictures.py):
+    the installation, the clock, the Windows build and gh, with the current folder in the installation's
+    temporary one. Yields {temporary place: where it is shown} and the temporary places no picture may
+    name, both known once the current folder is."""
     installation = fixture.Installation(records(), log_lines=[fixture.engine_line(
         CLOCK - 3 * 86400, fixture.VERSION, reporter.ENGINE_LOG_WORDS["verified"])])
     fake = fixture.FakeGh(SHOWN_GH, login=LOGIN)
@@ -115,18 +118,30 @@ def run(answers, *, gh: bool):
                       mock.patch.object(reporter, "find_gh", return_value=SHOWN_GH if gh else None),
                       mock.patch.object(reporter.subprocess, "run", fake),
                       mock.patch.object(reporter.subprocess, "Popen", side_effect=AssertionError("a real process")),
-                      mock.patch.object(reporter, "show", return_value=True),
-                      mock.patch.object(reporter, "input", console.input, create=True),
-                      contextlib.redirect_stdout(console), contextlib.redirect_stderr(console)):
+                      mock.patch.object(reporter, "show", return_value=True)):
             stack.enter_context(patch)
-        reporter.main(["guide"])
         cwd = pathlib.Path.cwd()
         places = {str(installation.home): SHOWN_PRODUCT, str(cwd): SHOWN_FOLDER, str(work): SHOWN_FOLDER}
         temporary = {str(installation.root), os.path.realpath(installation.root), tempfile.gettempdir()}
-    text = console.text.getvalue()
+        yield places, temporary
+
+
+def shown_where(text: str, places: dict) -> str:
+    """The text with each temporary place replaced by where it is shown, the longest first."""
     for place in sorted(places, key=len, reverse=True):
         text = text.replace(place, places[place])
-    return text, temporary
+    return text
+
+
+def run(answers, *, gh: bool):
+    """(what the console shows, the temporary places no frame may name) for one run of the guide."""
+    console = Console(answers)
+    with made_up(gh=gh) as (places, temporary), contextlib.ExitStack() as stack:
+        for patch in (mock.patch.object(reporter, "input", console.input, create=True),
+                      contextlib.redirect_stdout(console), contextlib.redirect_stderr(console)):
+            stack.enter_context(patch)
+        reporter.main(["guide"])
+    return shown_where(console.text.getvalue(), places), temporary
 
 
 # The four pictures: which run, and the question each one stops at.
@@ -251,19 +266,19 @@ def chunk(kind: str, body: bytes) -> bytes:
     return struct.pack(">I4s", len(body), kind) + body + struct.pack(">I", zlib.crc32(kind + body))
 
 
-def carrying(png: bytes, text: str) -> bytes:
+def carrying(png: bytes, text: str, keyword: str = KEYWORD) -> bytes:
     """The picture with its image chunks only, and the text it shows in one iTXt chunk."""
     kept = [(kind, body) for kind, body in chunks(png) if kind in ("IHDR", "PLTE", "IDAT")]
-    words = KEYWORD.encode("latin-1") + b"\0\0\0" + b"\0" + b"\0" + text.encode("utf-8")
+    words = keyword.encode("latin-1") + b"\0\0\0" + b"\0" + b"\0" + text.encode("utf-8")
     return b"\x89PNG\r\n\x1a\n" + b"".join(chunk(kind, body) for kind, body in kept) \
         + chunk("iTXt", words) + chunk("IEND", b"")
 
 
-def carried(png: bytes) -> str | None:
+def carried(png: bytes, keyword: str = KEYWORD) -> str | None:
     """The text a picture carries, or None."""
     for kind, body in chunks(png):
-        if kind == "iTXt" and body.startswith(KEYWORD.encode("latin-1") + b"\0"):
-            rest = body[len(KEYWORD) + 1:]
+        if kind == "iTXt" and body.startswith(keyword.encode("latin-1") + b"\0"):
+            rest = body[len(keyword) + 1:]
             if rest[:2] != b"\0\0":
                 raise ValueError("the text is compressed")
             _language, _translated, text = rest[2:].split(b"\0", 2)

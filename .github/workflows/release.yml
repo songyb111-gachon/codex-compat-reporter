@@ -3,8 +3,8 @@ name: release
 # A release is built here, from the tag alone, and not on anyone's machine: the ZIP people download is
 # made from the tagged tree by jobs whose whole input is public, and no personal credential touches it.
 #
-# Two jobs, split by privilege. `build` runs the tag's own code - its tests and tools/make_release.py -
-# holding a read-only token it does not keep on disk. `publish` holds the rights to attest and to create
+# Two jobs, split by privilege. `build` runs the tag's own code - tools/make_exe.py, its tests and
+# tools/make_release.py - holding a read-only token it does not keep on disk. `publish` holds the rights to attest and to create
 # the release, and runs none of the repository's code: it takes what `build` made, checks it again,
 # attests it and publishes it. Every action is pinned by its full commit SHA - the pins the product's
 # own workflows use - and nothing else is downloaded or installed.
@@ -22,7 +22,7 @@ concurrency:
 
 jobs:
   build:
-    # The tool is Windows-only, and so are its tests.
+    # The tool is Windows-only, and so are its tests and the compiler of its window.
     runs-on: windows-latest
     permissions:
       contents: read
@@ -49,6 +49,12 @@ jobs:
           # checked here, once. tools/make_release.py refuses one that is not the tool's __version__.
           [[ "$TAG" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]] || { echo "::error::tag $TAG is not vMAJOR.MINOR.PATCH"; exit 1; }
           echo "version=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
+
+      - name: Build Report.exe
+        # The window, compiled from the tag's gui/ by the C# compiler of .NET Framework 4.8 that every
+        # Windows has, and written beside codex_compat_report.py, where the ZIP takes it from. Nothing is
+        # downloaded, and the same sources and compiler give the same bytes.
+        run: python tools/make_exe.py
 
       - name: Run the tests
         # A tag is not a reason to skip them; it is the last moment they still help.
@@ -120,9 +126,9 @@ jobs:
           recorded="$(cut -d' ' -f1 "$ZIP.sha256")"
           actual="$(sha256sum "$ZIP" | cut -d' ' -f1)"
           [[ "$recorded" == "$actual" ]] || { echo "::error::checksum mismatch: recorded $recorded, actual $actual"; exit 1; }
-          # The six files a reporter needs, under one folder, in the order they were packed, and nothing else.
+          # The seven files a reporter needs, under one folder, in the order they were packed, and nothing else.
           folder="codex-compat-reporter-$VERSION"
-          wanted="$(printf "$folder/%s\n" codex_compat_report.py Report.cmd README.md README.ko.md LICENSE docs/REPORT_FORMAT.md)"
+          wanted="$(printf "$folder/%s\n" codex_compat_report.py Report.exe Report.cmd README.md README.ko.md LICENSE docs/REPORT_FORMAT.md)"
           listed="$(unzip -Z1 "$ZIP")"
           [[ "$listed" == "$wanted" ]] || { echo "::error::the ZIP holds something else:"; echo "$listed"; exit 1; }
           echo "$ZIP verified: $actual"

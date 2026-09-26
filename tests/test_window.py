@@ -15,7 +15,9 @@ codex_compat_report.py answered through its --json interface. What it promises, 
   on another and every control named for a screen reader, in a tab order, with Back, Next and Close at
   the bottom right, Enter on the default button and Esc on Close (PageTests);
 - the pages are the guide's five steps in the guide's words, and what they show of the machine, the
-  report and a send is what the script answered (WordsTests).
+  report and a send is what the script answered (WordsTests);
+- the README's pictures of it show what it describes today, from the made-up machine's answers, and
+  what the ZIP packs is a Report.exe of the tool's version (PictureTests).
 
 Report.exe is only ever run here with --fixture: its answers are made in this process by the reporter's
 own functions against the tests' made-up installation, with gh played by FakeGh, so Report.exe starts no
@@ -50,6 +52,9 @@ import test_report as fixture  # noqa: E402 - sandboxes the homes before the rep
 import test_distribution as distribution  # noqa: E402
 import codex_compat_report as reporter  # noqa: E402
 import make_exe  # noqa: E402
+import make_pictures  # noqa: E402
+import make_release  # noqa: E402
+import make_window_pictures  # noqa: E402
 
 GUI = ROOT / "gui"
 SCALES = ("1", "1.25", "1.5", "2")
@@ -285,6 +290,8 @@ class BuildTests(unittest.TestCase):
 
     def test_its_version_is_the_scripts(self):
         self.assertIn('[assembly: AssemblyInformationalVersion("%s")]' % reporter.__version__, make_exe.version_source())
+        # What Explorer's Properties shows, and what the release ZIP checks before it packs Report.exe.
+        self.assertEqual(make_release.product_version(report_exe().read_bytes()), reporter.__version__)
         (page,) = describe("no-python")
         self.assertEqual(control(page, "purpose")["text"],
                          "codex-compat-reporter %s: how Codex Auto Resume behaved on this machine, as a file."
@@ -659,6 +666,56 @@ class WordsTests(unittest.TestCase):
                          "the guide's answer when nothing is typed: keep the file")
         (kept,) = describe("exists", ("4",))
         self.assertEqual((kept["at"], FIXTURES["exists"]["report"]["said"]), (4, reporter.KEPT))
+
+
+# ------------------------------------------------------------------------------ pictures
+class PictureTests(unittest.TestCase):
+    """docs/images/window-*.png, made by tools/make_window_pictures.py: Report.exe's own drawing of each
+    page from the made-up machine's answers. What each carries is held to what Report.exe describes of
+    that page now, from those answers made again here - change a word the window shows, and this fails
+    until the pictures are made again."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.answered = pathlib.Path(WORK.name) / "pictures.json"
+        cls.answered.write_text(json.dumps(make_window_pictures.answers()), encoding="utf-8")
+        cls.described = make_window_pictures.describe(report_exe(), cls.answered)
+
+    def test_each_picture_shows_what_report_exe_describes_today(self):
+        for name, page in make_window_pictures.PICTURES:
+            description = self.described[name]
+            png = (ROOT / "docs" / "images" / name).read_bytes()
+            with self.subTest(name):
+                self.assertEqual((description["page"], description["at"]), (page, int(page)))
+                self.assertEqual(make_window_pictures.carried(png), make_window_pictures.shown_text(description),
+                                 "run: python tools/make_window_pictures.py")
+                width, height = [int.from_bytes(make_pictures.chunks(png)[0][1][at:at + 4], "big") for at in (0, 4)]
+                self.assertEqual([width, height], description["client"][2:], "the window's inside, at scale 1")
+
+    def test_they_show_the_five_steps_and_the_fifth_ready_to_send(self):
+        self.assertEqual([page for _name, page in make_window_pictures.PICTURES], list(PAGES))
+        fifth = self.described["window-5.png"]
+        self.assertEqual(fifth["state"], "plan")
+        self.assertEqual((control(fifth, "have_read")["checked"], control(fifth, "send")["enabled"]), (True, True))
+        self.assertIsNotNone(control(fifth, "have_read")["visible"], "scrolled to its end: the box is in the picture")
+        self.assertIsNotNone(control(fifth, "writes")["visible"])
+        for description in self.described.values():
+            self.assertEqual((description["scale"], description["size"]), (1, "default"))
+
+    def test_the_font_and_the_end_change_where_things_are_never_what_they_say(self):
+        """--font and --end are for the pictures only: the same controls, the same words and the same
+        states as the page the tests above hold, in another family or scrolled."""
+        plain = describe(None, PAGES, ("1",), ("default",), "--have-read", fixture_path=self.answered)
+        for before, after in zip(plain, (self.described[name] for name, _page in make_window_pictures.PICTURES)):
+            with self.subTest(before["page"]):
+                self.assertEqual([(entry["name"], entry["text"], entry["checked"], entry["enabled"])
+                                  for entry in before["controls"]],
+                                 [(entry["name"], entry["text"], entry["checked"], entry["enabled"])
+                                  for entry in after["controls"]])
+                self.assertEqual(make_window_pictures.shown_text(before), make_window_pictures.shown_text(after))
+        self.assertIsNone(control(plain[4], "have_read")["visible"], "without --end the fifth page opens at its top")
+        done = run_exe("--fixture", str(self.answered), "--describe", "1", "--font", "No Such Family Anywhere")
+        self.assertNotEqual(done.returncode, 0, "a family that is not installed is refused, not drawn in another")
 
 
 if __name__ == "__main__":

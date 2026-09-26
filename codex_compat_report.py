@@ -69,7 +69,7 @@ import tempfile
 import time
 import traceback
 
-__version__ = "1.3.1"
+__version__ = "1.4.0"
 
 REPO = "songyb111-gachon/codex-auto-resume-windows"
 HOST = "github.com"                             # every GitHub call names it; GH_HOST never redirects one
