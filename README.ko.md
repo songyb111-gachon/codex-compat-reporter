@@ -10,7 +10,35 @@ JSON 파일 하나로 만들어 프로젝트에 보내는 작은 윈도우 도�
 관리자 PC 한 대의 기록만 들어갑니다. 한 대, 한 가지 사용 방식입니다. 이 도구는 다른 PC도 말할 수
 있게 하는 통로입니다.
 
+## 빠른 시작
+
+1. [최신 릴리스](https://github.com/songyb111-gachon/codex-compat-reporter/releases/latest)에서
+   `codex-compat-reporter-<버전>.zip`을 받아 압축을 풉니다. 파일을 마우스 오른쪽 단추로 누르고
+   **모두 압축 풀기**를 고르세요.
+2. 풀린 폴더의 `Report.cmd`를 두 번 누릅니다. Codex Auto Resume이 함께 설치한 파이썬으로 돌아가므로
+   더 설치할 것은 없습니다.
+3. 묻는 말에 답합니다. 이 PC가 보여 줄 수 있는 것을 보여 주고, 깃허브 아이디를 묻고, 보고서를 쓴 뒤
+   메모장으로 엽니다. 읽어 보세요. 짧습니다.
+4. `send`를 입력하면 보냅니다. 그 밖의 어떤 답도 아무것도 보내지 않고, 파일은 쓴 자리에 그대로 남습니다.
+   GitHub CLI가 로그인되어 있지 않으면, 웹에서 파일을 보내는 방법을 단계별로 알려 줍니다.
+
+![안내의 1·2단계: 이 PC가 보여 줄 수 있는 것, 그리고 gh가 로그인한 깃허브 아이디를 제안](docs/images/guide-1-start.png)
+
+![3·4단계: 쓴 보고서의 요약과 전체 경로, 메모장으로 연 파일](docs/images/guide-2-read.png)
+
+![5단계: 보내면 GitHub에 무엇을 쓰는지 보내기 전에 보여 주고, send를 입력](docs/images/guide-3-send.png)
+
+![GitHub CLI가 없을 때의 5단계: 보고서는 남기고, 웹에서 보내는 방법을 단계별로](docs/images/guide-4-web.png)
+
+그림은 가상의 PC에서 실제로 돌린 안내 화면입니다. 아이디는 ExampleUser이고, 기록은 누구의 것도
+아닙니다. [tools/make_pictures.py](tools/make_pictures.py)가 만들며, 도구의 안내 문구는 영어입니다.
+
 ## 받기
+
+빠른 시작의 릴리스 ZIP에는 이 파일과 함께, 아래의 `guide`를 실행하는 `Report.cmd`가 들어 있습니다.
+릴리스마다 GitHub Actions가 태그에서 만들고, ZIP 옆에 SHA-256과 빌드 증명(attestation)을 둡니다.
+`gh attestation verify <그 ZIP> --repo songyb111-gachon/codex-compat-reporter`가 어느 워크플로 실행과
+커밋이 만들었는지 알려 줍니다.
 
 표준 라이브러리만 쓰는 파이썬 파일 하나이고, 설치할 것은 없습니다. 저장소를 받아 그 폴더에서
 실행하거나,
@@ -26,6 +54,9 @@ cd codex-compat-reporter
 필요한 것:
 
 - 윈도우, 그리고 Python 3.11 이상. CI는 Python 3.11, 3.12, 3.13, 3.14에서 테스트를 돌립니다.
+  `Report.cmd`는 따로 설치한 파이썬이 필요 없습니다. Codex Auto Resume이 설치한 파이썬, 파이썬 런처,
+  `PATH`에 있는 폴더의 `python.exe` 순서로 찾으며, 모두 전체 경로로 부르고 지금 폴더의 것은 절대
+  쓰지 않습니다.
 - 설치된 Codex Auto Resume v0.6.0 이상. 감시기가 한 번 이상 돌았어야 합니다.
 - `submit`에만: [GitHub CLI](https://cli.github.com/)가 `gh auth login --hostname github.com`으로
   로그인되어 있어야 합니다.
@@ -37,6 +68,7 @@ cd codex-compat-reporter
 ## 쓰기
 
 ```
+python codex_compat_report.py guide                              # 아래 모두를, 한 번에 한 질문씩
 python codex_compat_report.py status                             # 이 PC가 보여 줄 수 있는 것
 python codex_compat_report.py report --login <내 깃허브 아이디>   # 보고서 쓰기
                                                                  # ...이제 파일을 열어 읽어 보기
@@ -54,6 +86,7 @@ python codex_compat_report.py submit <그 파일> --yes              # PR 열기
 
 | 명령과 옵션 | 하는 일 |
 | --- | --- |
+| `guide` | `Report.cmd`가 실행하는 것: `status`, `report`, `submit`을 한 번에 한 질문씩 합니다. `gh`가 로그인한 아이디를 제안하고, 이미 있는 파일은 '예' 없이 덮어쓰지 않으며, 보고서를 메모장으로, 프로젝트 페이지를 브라우저로 여는 것도 '예'라고 할 때만 합니다. `send`를 입력할 때만 보내며, 그때는 물어볼 때의 파일 SHA-256을 고정한 채 `submit --yes`와 똑같이 보냅니다. `gh`가 내 아이디로 로그인되어 있지 않으면 파일을 남기고 웹에서 보내는 방법을 알려 줍니다. 모든 질문의 기본값은 아무것도 보내지 않습니다. |
 | `status` | 설치된 제품 버전, 제품이 보고 있는 Codex 버전, 이 PC의 기록 수(이 Codex 버전, 다른 버전, 어느 버전에도 놓지 못한 기록과 그 이유), 기록 지우기로 숨긴 기록 수, 이 버전에서 제품 자체 점검이 통과했는지를 보여 줍니다. 아무것도 쓰지 않습니다. |
 | `report --login 아이디` | 지금 설치된 Codex 버전에 대한 보고서를, 내 깃허브 아이디로 씁니다. 필수입니다. |
 | `report --codex-version 버전` | 이 PC에 기록이 있는 다른 Codex 버전을 보고합니다. `0.155.0`이나 `codex-cli 0.155.0`처럼 적습니다. `--version`도 같은 옵션입니다. |
@@ -70,10 +103,10 @@ python codex_compat_report.py submit <그 파일> --yes              # PR 열기
 
 | 코드 | 뜻 |
 | --- | --- |
-| 0 | 끝남: `status`가 출력했거나, `report`가 파일을 썼거나, `submit --dry-run`이 모두 확인했거나, `submit --yes`가 PR을 열었습니다. |
+| 0 | 끝남: `status`가 출력했거나, `report`가 파일을 썼거나, `submit --dry-run`이 모두 확인했거나, `submit --yes`가 PR을 열었습니다. `guide`는 보고서를 보냈든 남겨 두었든 끝까지 갔을 때입니다. |
 | 1 | 예상하지 못한 오류, 곧 버그입니다. 출력된 내용과 함께 이슈를 열어 주세요. |
 | 2 | 거절: 이유와 할 일이 오류 출력에 있고, 아무것도 쓰거나 보내지 않았습니다. 단, `submit --yes`에서는 앞 단계가 GitHub에 이미 쓴 뒤(포크, 브랜치, 올린 파일) 다음 단계가 실패할 수 있습니다. 그때는 그 실행이 쓴 것을 메시지에 적으며, `submit`을 다시 실행해도 안전합니다. 포크는 그대로 두고, 브랜치를 프로젝트 main으로 되돌리고, 파일을 다시 더하기 때문입니다. 명령줄을 잘못 적었을 때도 2입니다. |
-| 3 | `submit`: 프로젝트가 아직 보고서를 받지 않습니다. 아무것도 보내지 않았으니 파일을 두세요. |
+| 3 | `submit`이나 `guide`: 프로젝트가 아직 보고서를 받지 않습니다. 아무것도 보내지 않았으니 파일을 두세요. |
 
 ## 무엇을 읽는가
 
@@ -99,7 +132,8 @@ python codex_compat_report.py submit <그 파일> --yes              # PR 열기
 내 PC에 쓰는 것은 보고서 파일뿐이고, `submit --yes` 동안에만 업로드할 내용의 임시 사본을 임시
 폴더에 두었다가 보내는 즉시 지웁니다. WAL 모드인 SQLite 데이터베이스를 읽으면 SQLite가 공유 메모리
 색인(`-shm` 파일)을 갱신할 수 있습니다. 제품 자체의 읽기도 마찬가지이고, 데이터베이스 자체에는
-아무것도 쓰지 않습니다.
+아무것도 쓰지 않습니다. `guide`는 보고서를 메모장으로, 프로젝트 페이지를 브라우저로 여는데, 둘 다 '예'라고 할 때만
+엽니다.
 
 ## 보고서에 담기는 것, 공개되는 것
 
@@ -145,6 +179,11 @@ GitHub가 새 포크를 복사하는 데는 잠시 걸리므로, `submit`은 브
 중간 단계가 실패하면 앞 단계가 쓴 것은 GitHub에 남고, 거절 메시지가 그것을 적습니다. `submit`을
 다시 실행해도 안전합니다. 포크는 그대로 두고, 브랜치를 프로젝트 main으로 되돌리고, 파일을 다시
 더합니다.
+
+`guide`는 아이디를 물을 때 앞의 두 질문 - `gh`가 로그인되어 있는지, 누구로 되어 있는지 - 을 해서 `gh`의
+아이디를 제안합니다. `send`를 입력하면 모든 질문을 다시 하고, 물어볼 때의 파일 SHA-256을 고정한 채
+`submit --yes`와 똑같이 씁니다. 그 뒤에 바뀐 파일이나, 보여 준 것과 달라진 쓰기 목록은 거절하며 아무것도
+보내지 않습니다.
 
 프로젝트 안의 이름은 내 PC에서 파일을 무엇이라 불렀든 언제나 내 아이디 아래의
 `codex-cli-<버전>.json`입니다. 보고서는 깃허브 아이디 하나당 Codex 버전 하나에 하나이고, 열린 보고서 PR은

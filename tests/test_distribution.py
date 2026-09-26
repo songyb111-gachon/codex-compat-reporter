@@ -1,11 +1,14 @@
-"""What the reporter ships, held to tests.
+"""What the reporter ships, and the pictures that show it, held to tests.
 
 - Report.cmd starts the guide beside it with a Python found by full path only - never through the
   current folder - in UTF-8, and always waits before its window closes (ReportCmdTests);
 - the release ZIP holds the six files a reporter needs and nothing else, the same bytes from the same
   tree (ReleaseZipTests); the workflow that publishes it builds from the tag alone, keeps write access
   where none of the repository's code runs, leaves no token on disk, and attests what it publishes
-  (ReleaseWorkflowTests).
+  (ReleaseWorkflowTests);
+- every picture the READMEs show is there, carries the text it shows and nothing else, and that text
+  is exactly what the guide prints today against the tests' fixture: its values, and no one else's
+  (PictureTests).
 
 YAML is read as text, as the product's tests/test_workflow_privilege.py reads it: no YAML library is
 needed, and what is held is the text GitHub runs. No test here starts a process (setUpModule).
@@ -33,10 +36,12 @@ for _path in (str(ROOT), str(HERE), str(ROOT / "tools")):
 
 import test_report as fixture  # noqa: E402 - sandboxes the homes before the reporter is imported
 import codex_compat_report as reporter  # noqa: E402
+import make_pictures  # noqa: E402
 import make_release  # noqa: E402
 
 CMD = ROOT / "Report.cmd"
 WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
+READMES = (ROOT / "README.md", ROOT / "README.ko.md")
 # The product's checkout, when it sits beside this one (the maintainer's machine, or CAR_CHECKOUT).
 PRODUCT = fixture.PRODUCT
 
@@ -366,6 +371,72 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertLess(build.index("python -m unittest discover -s tests"), build.index("python tools/make_release.py"))
         self.assertIn('export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"', build)
         self.assertIn(r'[[ "$TAG" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]', build)
+
+
+# ------------------------------------------------------------------------------ the pictures
+IMAGE = re.compile(r"!\[([^\]]*)\]\(([^)\s]+)\)")
+
+
+class PictureTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.frames = make_pictures.frames()          # the guide, run now against the fixture
+
+    def linked(self, readme):
+        return IMAGE.findall(readme.read_text(encoding="utf-8"))
+
+    def test_every_picture_the_readmes_show_is_there_and_both_show_the_same_ones(self):
+        expected = ["docs/images/" + name for name, _gh, _question in make_pictures.PICTURES]
+        for readme in READMES:
+            with self.subTest(readme.name):
+                links = self.linked(readme)
+                self.assertEqual([path for _alt, path in links], expected)
+                for alt, path in links:
+                    self.assertTrue(alt.strip(), "every picture says what it shows")
+                    self.assertTrue((ROOT / path).is_file(), path)
+        self.assertEqual(sorted(path.name for path in (ROOT / "docs" / "images").iterdir()),
+                         sorted(name for name, _gh, _question in make_pictures.PICTURES))
+
+    def test_each_picture_holds_its_image_and_its_text_and_nothing_else(self):
+        for name in self.frames:
+            with self.subTest(name):
+                chunks = make_pictures.chunks((ROOT / "docs" / "images" / name).read_bytes())
+                self.assertEqual(chunks[0][0], "IHDR")
+                self.assertEqual(chunks[-1][0], "IEND")
+                self.assertLessEqual({kind for kind, _body in chunks}, {"IHDR", "PLTE", "IDAT", "iTXt", "IEND"})
+                self.assertEqual([kind for kind, _body in chunks].count("iTXt"), 1)
+                width, height = [int.from_bytes(chunks[0][1][at:at + 4], "big") for at in (0, 4)]
+                self.assertEqual((width, height), (make_pictures.WIDTH * make_pictures.SCALE,
+                                                   make_pictures.HEIGHT * make_pictures.SCALE))
+
+    def test_each_picture_shows_what_the_guide_prints_today(self):
+        """Change a word the guide prints, and this fails until the pictures are made again."""
+        for name, rows in self.frames.items():
+            with self.subTest(name):
+                shown = make_pictures.carried((ROOT / "docs" / "images" / name).read_bytes())
+                self.assertEqual(shown, make_pictures.shown_text(rows),
+                                 "run: python tools/make_pictures.py (from PowerShell or cmd)")
+
+    def test_nothing_in_a_picture_is_anyone_elses(self):
+        for name in self.frames:
+            shown = make_pictures.unwrapped(make_pictures.carried((ROOT / "docs" / "images" / name).read_bytes()))
+            with self.subTest(name):
+                make_pictures.refuse_elsewhere(shown, (tempfile.gettempdir(),))
+                self.assertIn(make_pictures.LOGIN, shown)
+                self.assertEqual(set(re.findall(r"C:\\Users\\([^\\\s]+)", shown)), {make_pictures.LOGIN})
+                self.assertNotIn("@", shown)
+
+    def test_the_check_refuses_what_is_not_the_fixtures(self):
+        for text in ("installation : C:\\Users\\someone\\.codex-auto-resume", "signed in as someone",
+                     "mail me at someone@example.com", "D:\\work\\report.json",
+                     "GitHub login [someone]: ", tempfile.gettempdir()):
+            with self.subTest(text), self.assertRaises(SystemExit):
+                make_pictures.refuse_elsewhere(text, (tempfile.gettempdir(),))
+        # A login the window cuts in two is read whole: the fixture's passes, and anyone else's does not.
+        width = make_pictures.COLUMNS
+        make_pictures.refuse_elsewhere(make_pictures.unwrapped("signed in as ExampleUs".rjust(width) + "\ner, host"))
+        with self.assertRaises(SystemExit):
+            make_pictures.refuse_elsewhere(make_pictures.unwrapped("signed in as ExampleUs".rjust(width) + "\nerX, host"))
 
 
 def setUpModule():

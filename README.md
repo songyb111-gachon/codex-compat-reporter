@@ -10,7 +10,35 @@ The product's compatibility data says which Codex versions have been seen to wor
 maintainer's own machine feeds it, which is one machine and one way of working. This is how yours
 can say something too.
 
+## Quick start
+
+1. Download `codex-compat-reporter-<version>.zip` from
+   [the latest release](https://github.com/songyb111-gachon/codex-compat-reporter/releases/latest)
+   and unzip it: right-click it and choose Extract All.
+2. Double-click `Report.cmd` in the folder that makes. It runs on the Python that Codex Auto Resume
+   installed with itself, so there is nothing more to install.
+3. Answer its questions. It shows what this machine can show, asks for your GitHub login, writes the
+   report and opens it in Notepad. Read it: it is short.
+4. Type `send` to send it. Anything else sends nothing, and the file stays where it was written.
+   Without the GitHub CLI signed in, it says step by step how to send the file on the web instead.
+
+![Step 1 and 2 of the guide: what this machine can show, and the GitHub login gh is signed in as, offered](docs/images/guide-1-start.png)
+
+![Step 3 and 4: the report written, its summary and full path, and the file open in Notepad](docs/images/guide-2-read.png)
+
+![Step 5: what sending writes to GitHub, listed before anything is sent, and send typed](docs/images/guide-3-send.png)
+
+![Step 5 without the GitHub CLI: the report kept, and how to send it on the web, step by step](docs/images/guide-4-web.png)
+
+The pictures are the guide's real run on a made-up machine - the login ExampleUser, and records that
+belong to no one - made by [tools/make_pictures.py](tools/make_pictures.py).
+
 ## Get it
+
+The release ZIP in the quick start above holds this file with `Report.cmd`, which runs `guide`, below.
+Each release is built from its tag by GitHub Actions, with the ZIP's SHA-256 beside it and a build
+attestation: `gh attestation verify <the ZIP> --repo songyb111-gachon/codex-compat-reporter`
+says which workflow run and commit made it.
 
 It is one file of standard-library Python; there is nothing to install. Either clone the repository
 and work in its folder:
@@ -27,6 +55,9 @@ it from.
 It needs:
 
 - Windows, and Python 3.11 or newer. CI runs the tests on Python 3.11, 3.12, 3.13 and 3.14.
+  `Report.cmd` needs none of its own: it takes the Python Codex Auto Resume installs, then the
+  Python launcher, then `python.exe` from a folder on `PATH` - each by its full path, and never one
+  in the current folder.
 - Codex Auto Resume v0.6.0 or newer, installed, with its watcher having run at least once.
 - For `submit` only: the [GitHub CLI](https://cli.github.com/), signed in with
   `gh auth login --hostname github.com`.
@@ -38,6 +69,7 @@ installer puts it there), `py` works the same; the Microsoft Store's Python has 
 ## Use it
 
 ```
+python codex_compat_report.py guide                           # all of the below, one question at a time
 python codex_compat_report.py status                          # what this machine can show
 python codex_compat_report.py report --login <your login>     # write the report
                                                               # ...now open the file and read it
@@ -56,6 +88,7 @@ machine.
 
 | Command and option | What it does |
 | --- | --- |
+| `guide` | What `Report.cmd` runs: `status`, `report` and `submit`, one question at a time. It offers the login `gh` is signed in as, never writes over a file already there without a yes, opens the report in Notepad and the project's page in your browser only on a yes, and sends only when you type `send` - then exactly as `submit --yes` would, with the file's SHA-256 pinned as it was when you were asked. Without `gh` signed in as your login, it keeps the file and says how to send it on the web. Every question's default sends nothing. |
 | `status` | Prints the installed product version, the Codex version it sees, how many records exist here (on this Codex version, on others, and not placed on any, with the reason), how many are hidden with Clear history, and whether the product's own checks passed on this version. Writes nothing. |
 | `report --login LOGIN` | Writes the report for the Codex version installed now, filed under your GitHub login. Required. |
 | `report --codex-version VERSION` | Reports on another Codex version this machine has records for, as `0.155.0` or `codex-cli 0.155.0`. `--version` is the same option. |
@@ -72,10 +105,10 @@ machine.
 
 | Code | Meaning |
 | --- | --- |
-| 0 | Done: `status` printed, `report` wrote the file, `submit --dry-run` checked everything, or `submit --yes` opened the pull request. |
+| 0 | Done: `status` printed, `report` wrote the file, `submit --dry-run` checked everything, or `submit --yes` opened the pull request. For `guide`: it came to an end, whether it sent the report or you kept it. |
 | 1 | An unexpected error - a bug. Please open an issue with what it printed. |
 | 2 | Refused, with the reason and what to do on the error output. Nothing was written or sent - except under `submit --yes`, where a step on GitHub can fail after earlier ones have written (the fork, the branch, the uploaded file). The message then lists what that run wrote, and running `submit` again is safe: it keeps the fork, resets the branch to the project's main and adds the file again. Also a mistake in the command line. |
-| 3 | `submit`: the project is not taking reports yet. Nothing was sent; keep the file. |
+| 3 | `submit` or `guide`: the project is not taking reports yet. Nothing was sent; keep the file. |
 
 ## What it reads
 
@@ -101,7 +134,8 @@ say so.
 It writes nothing on your machine but the report file, and - during `submit --yes` only - a
 temporary copy of the upload in your temporary folder, deleted as soon as it is sent. Reading a
 SQLite database that is in WAL mode lets SQLite update its shared-memory index (the `-shm` file),
-as the product's own reads do; no data is written to the database itself.
+as the product's own reads do; no data is written to the database itself. `guide` also opens
+Notepad on the report, and the project's page in your browser, each only when you say yes.
 
 ## What the report carries, and what is published
 
@@ -152,6 +186,12 @@ GitHub takes a moment to copy a new fork, so `submit` waits up to a minute for i
 the branch. If a step fails part-way, what the earlier steps wrote stays on GitHub and the refusal
 lists it. Running `submit` again is safe: it keeps the fork, resets the branch to the project's
 main and adds the file again.
+
+`guide` asks the first two questions - whether `gh` is signed in, and as whom - when it asks for
+your login, to offer the one `gh` has. When you type `send` it asks all of them again and writes
+exactly as `submit --yes` does, with the SHA-256 of the file pinned as it was when you were asked: a
+file changed since then, or a list of writes that is no longer the one you were shown, is refused
+and nothing is sent.
 
 The name in the project is always `codex-cli-<version>.json` under your login, whatever you called
 the file on your machine. There is one report per GitHub login per Codex version, and one open
