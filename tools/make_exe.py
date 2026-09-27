@@ -40,7 +40,7 @@ MANIFEST = "gui/Report.manifest"
 REFERENCES = ("System.dll", "System.Core.dll", "System.Drawing.dll", "System.Windows.Forms.dll")
 NAME = "Report.exe"
 VERSION = re.compile(r"\A(\d+)\.(\d+)\.(\d+)\Z")
-HOLDER = re.compile(r"(?m)^Copyright \(c\) \d{4} ([A-Za-z][A-Za-z .'-]{0,80})\s*$")
+HOLDER = re.compile(r"(?m)^Copyright \(c\) \d{4} ([A-Za-z0-9][A-Za-z0-9 .'-]{0,80})\s*$")
 
 
 def compiler():
