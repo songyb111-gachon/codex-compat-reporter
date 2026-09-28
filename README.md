@@ -108,6 +108,12 @@ Windows will not, so a file beside it named as one of Windows' DLLs is not loade
 Its tests start it beside copies of Windows' own DLLs and check that it loaded none of them from its
 folder or from the current one.
 
+One file it cannot refuse to read: .NET reads a `<program>.config` beside a program as it starts, before
+the program's own code runs. The reporter never comes with one, so if one is beside it, it stops and says
+so rather than running; but what such a file asks of .NET at the very start has happened by then. For
+the strictest setup, keep the reporter in a folder of its own - the ZIP unzips to one - rather than
+among other downloads.
+
 It is one file of standard-library Python; there is nothing to install. Either clone the repository
 and work in its folder:
 

@@ -73,6 +73,10 @@ namespace CodexCompatReporter
             {
                 return 1;
             }
+            if (!Dlls.NoConfigBeside(arguments.Length == 0))
+            {
+                return 1;
+            }
             return Started(arguments);
         }
 
@@ -150,6 +154,36 @@ namespace CodexCompatReporter
                 MessageBox(IntPtr.Zero, Unguarded, "codex-compat-reporter", MB_ICONERROR);
             }
             return guarded;
+        }
+
+        internal const string Configured =
+            "This program stops here: a file named {0} is beside it. .NET reads such a file as a program like " +
+            "this one starts, and this one never comes with one, so it may have been put there to change what " +
+            "runs. Delete that file, or run the reporter from a folder of its own, as its ZIP unzips to.";
+
+        // A <program>.config beside it. .NET reads it before Main, so what it asks for as .NET starts has
+        // already happened by now and nothing here can undo that; what it would change later - which
+        // assemblies are loaded, from where - does not happen, because the program stops. The reporter
+        // never ships one, so its presence is someone else's file. The message is written to standard
+        // error, and shown in a box only when the window was to open (never for a test hook).
+        public static bool NoConfigBeside(bool showBox)
+        {
+            string config = typeof(Dlls).Assembly.Location + ".config";
+            if (!File.Exists(config))
+            {
+                return true;
+            }
+            string text = string.Format(Configured, Path.GetFileName(config));
+            byte[] said = new UTF8Encoding(false).GetBytes(text + "\n");
+            using (Stream errors = Console.OpenStandardError())
+            {
+                errors.Write(said, 0, said.Length);
+            }
+            if (showBox)
+            {
+                MessageBox(IntPtr.Zero, text, "codex-compat-reporter", MB_ICONERROR);
+            }
+            return false;
         }
     }
 

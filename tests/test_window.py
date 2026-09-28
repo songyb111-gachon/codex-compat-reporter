@@ -739,6 +739,25 @@ class DllTests(unittest.TestCase):
                         self.assertTrue(same(module.parent, system32()), module)
                     self.assertLessEqual(len(taken.get(name.lower(), [])), 1, name)
 
+    def test_a_config_file_beside_it_stops_it(self):
+        """.NET reads <program>.config beside a program before Main; the reporter never ships one, so one
+        beside it is someone else's file and the program stops, saying so, instead of running."""
+        home = self.base / "home"
+        environment = dict(os.environ, USERPROFILE=str(home), LOCALAPPDATA=str(home / "Local"),
+                           APPDATA=str(home / "Roaming"), CODEX_AUTO_RESUME_HOME=str(home / "car"),
+                           CODEX_HOME=str(home / "codex"), GH_CONFIG_DIR=str(home / "gh"), PATH="")
+        run = lambda: subprocess.run([str(self.exe), "--where"], capture_output=True, cwd=str(self.here),
+                                     stdin=subprocess.DEVNULL, timeout=120, env=environment,
+                                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        self.assertEqual(run().returncode, 0, "without a config it answers")
+        config = pathlib.Path(str(self.exe) + ".config")
+        config.write_text('<?xml version="1.0" encoding="utf-8"?>\n<configuration>\n</configuration>\n',
+                          encoding="utf-8")
+        done = run()
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("%s is beside it" % config.name, done.stderr.decode("utf-8", "replace"))
+        self.assertEqual(done.stdout, b"", "nothing is answered")
+
     def test_the_first_thing_main_does_is_take_dlls_from_system32_alone_or_stop(self):
         main = method("Main", "string[] arguments")
         body = main[main.index("{") + 1:].strip()
