@@ -12,21 +12,20 @@ can say something too.
 
 ## Quick start
 
-1. Download `codex-compat-reporter-<version>.zip` from
+1. Download `CodexCompatReporter-<version>.exe` from
    [the latest release](https://github.com/songyb111-gachon/codex-compat-reporter/releases/latest)
-   and unzip it: right-click it and choose Extract All.
-2. Double-click `Report.exe` in the folder that makes. It runs the reporter on the Python that Codex
-   Auto Resume installed with itself, so there is nothing more to install.
+   and double-click it. The whole reporter is in that one file, and it runs on the Python that Codex
+   Auto Resume installed with itself, so there is nothing to unzip and nothing more to install.
 
-   Windows may first say **Windows protected your PC**: Report.exe is a program downloaded from the
+   Windows may first say **Windows protected your PC**: the file is a program downloaded from the
    internet, and it is not signed. Choose **More info**, then **Run anyway**. What says where it came
-   from is the release itself: `gh attestation verify <the ZIP> --repo songyb111-gachon/codex-compat-reporter`
-   proves the ZIP was built from the release's tag by this repository's workflow on GitHub, and names
+   from is the release itself: `gh attestation verify CodexCompatReporter-<version>.exe --repo songyb111-gachon/codex-compat-reporter`
+   proves the file was built from the release's tag by this repository's workflow on GitHub, and names
    the run and the commit (see [Get it](#get-it)).
-3. Go through its five pages with **Next**. It shows what this machine can show, fills in the GitHub
-   login the GitHub CLI is signed in as, writes the report and shows the whole file. Read it: it is
-   short.
-4. To send it, tick **I have read it** and choose **Send**. One more question follows, and its default
+2. Go through its five pages with **Next**. It shows what this machine can show, fills in the GitHub
+   login the GitHub CLI is signed in as, writes the report in the folder the program is in and shows
+   the whole file. Read it: it is short.
+3. To send it, tick **I have read it** and choose **Send**. One more question follows, and its default
    answer is Cancel. Anything else sends nothing, and the file stays where it was written. Without the
    GitHub CLI signed in, the last page says step by step how to send the file on the web instead, with
    a **Copy** button beside each value to type.
@@ -44,6 +43,15 @@ can say something too.
 The pictures are the window's own drawing of each page on a made-up machine - the one the guide's
 pictures below show: the login ExampleUser, and records that belong to no one - made by
 [tools/make_window_pictures.py](tools/make_window_pictures.py). Nothing was sent to make them.
+
+### Or the ZIP
+
+The same release has a second way to start: `codex-compat-reporter-<version>.zip`. Download it and
+unzip it: right-click it and choose Extract All. In the folder that makes, double-click `Report.exe` -
+the program above, byte for byte, under the name it has in the ZIP - and go on from step 2. Windows may
+say **Windows protected your PC** of it too, and the same answer holds. Beside it are `Report.cmd`, the
+same guide in a console window (below), the reporter itself, `codex_compat_report.py`, and what explains
+them.
 
 ## Report.cmd: the same guide in a console window
 
@@ -71,17 +79,26 @@ belong to no one - made by [tools/make_pictures.py](tools/make_pictures.py).
 
 ## Get it
 
-The release ZIP in the quick start above holds this file with `Report.exe`, its window, and
-`Report.cmd`, which runs `guide`, below. Each release is built from its tag by GitHub Actions, with the
-ZIP's SHA-256 beside it and a build attestation: `gh attestation verify <the ZIP> --repo songyb111-gachon/codex-compat-reporter`
-says which workflow run and commit made it. `Report.exe` is compiled in that same run, from
+The release in the quick start above has two ways to start: `CodexCompatReporter-<version>.exe`, the
+window on its own, and the ZIP, which holds this file with `Report.exe` - that same window, byte for
+byte - and `Report.cmd`, which runs `guide`, below. Each release is built from its tag by GitHub
+Actions, with each file's SHA-256 beside it and one build attestation that names both:
+`gh attestation verify <the file> --repo songyb111-gachon/codex-compat-reporter` says which workflow
+run and commit made it. `Report.exe` is compiled in that same run, from
 [gui/](gui/) by [tools/make_exe.py](tools/make_exe.py) with the C# compiler of .NET Framework 4.8 that
 every Windows has, and the same sources and compiler give the same bytes, so it can be built again from
 the tag and compared.
 
-`Report.exe` decides nothing itself. It runs `codex_compat_report.py` beside it with the Python
-`Report.cmd` would use, isolated and with no console window, and shows what the file answers through
-its `--json` interface - `survey`, `login`, `report --keep --json`, `submit --json` and
+`Report.exe` decides nothing itself. It carries this file inside it - `codex_compat_report.py` as it
+is at the release's tag, byte for byte, with its SHA-256 - which is why it runs on its own, and it runs
+that copy and no other, in the ZIP too. It keeps the copy in a folder of your own,
+`%LOCALAPPDATA%\codex-compat-reporter\` and then the first 16 hex digits of that SHA-256, and writes
+it there again whenever the file there is missing or holds other bytes; before every start of Python
+it reads the copy once more, and runs nothing that is not those bytes. If that folder cannot be
+written, the window says so and runs nothing. It runs the copy with the Python `Report.cmd` would use,
+isolated and with no console window, in the folder the program is in - so the report is written
+there, and a `gh.exe` beside the program is never used - and shows what the file answers through its
+`--json` interface - `survey`, `login`, `report --keep --json`, `submit --json` and
 `web-steps --json`, one JSON object each. The window and the guide say the same words, made by the
 same functions, and every byte of a report and of a send is this file's.
 
@@ -180,7 +197,9 @@ back only a number per kind - never their text. The product itself does the same
 say so.
 
 It writes nothing on your machine but the report file, and - during `submit --yes` only - a
-temporary copy of the upload in your temporary folder, deleted as soon as it is sent. Reading a
+temporary copy of the upload in your temporary folder, deleted as soon as it is sent. `Report.exe`
+writes one file more, and only that one: its own copy of this file, in
+`%LOCALAPPDATA%\codex-compat-reporter\` (see [Get it](#get-it)). Reading a
 SQLite database that is in WAL mode lets SQLite update its shared-memory index (the `-shm` file),
 as the product's own reads do; no data is written to the database itself. `guide` also opens
 Notepad on the report, and the project's page in your browser, each only when you say yes.

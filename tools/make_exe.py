@@ -11,6 +11,12 @@ fixes the two fields the compiler stamps anew on every run, so the same sources 
 anyone can rebuild Report.exe and compare. The manifest is embedded byte for byte, so the compiler is
 given it with CRLF line endings, whatever the checkout wrote: one with LF would build other bytes.
 
+Report.exe carries the reporter inside it: codex_compat_report.py, compiled in byte for byte as a
+managed resource, and the SHA-256 of those bytes as a constant beside it (embedded_source). It runs that
+copy and no other - written to a folder of the user's own (gui/Core.cs, LiveCore) - so the same file
+works in the release ZIP and on its own. The script is embedded as the checkout wrote it, which is how
+the ZIP packs it too: the copy inside Report.exe and the one beside it in the ZIP are the same bytes.
+
 Report.exe names .NET Framework 4.8 as its target (TargetFramework, which the in-box compiler does not
 add by itself): without it .NET runs it as a .NET 4.0 program, and WinForms leaves off what it fixed
 since - the colours of High Contrast, what a screen reader is told, Ctrl+A in a box of several lines.
@@ -37,6 +43,9 @@ import normalize_pe  # noqa: E402
 # In the order csc takes them, which is part of what makes the bytes the same.
 SOURCES = ("gui/Json.cs", "gui/Layout.cs", "gui/Core.cs", "gui/Confirm.cs", "gui/Wizard.cs", "gui/Program.cs")
 MANIFEST = "gui/Report.manifest"
+# The reporter Report.exe carries and runs: the file, and the name of the managed resource that holds it.
+SCRIPT = "codex_compat_report.py"
+RESOURCE = "codex_compat_report.py"
 REFERENCES = ("System.dll", "System.Core.dll", "System.Drawing.dll", "System.Windows.Forms.dll")
 NAME = "Report.exe"
 VERSION = re.compile(r"\A(\d+)\.(\d+)\.(\d+)\Z")
@@ -85,6 +94,27 @@ def version_source(root: pathlib.Path = ROOT) -> str:
     ])
 
 
+def script_bytes(root: pathlib.Path = ROOT) -> bytes:
+    """codex_compat_report.py as Report.exe carries it: the file's bytes, exactly as they are."""
+    return (root / SCRIPT).read_bytes()
+
+
+def embedded_source(root: pathlib.Path = ROOT) -> str:
+    """The SHA-256 of the script Report.exe carries, as C#: the one value its copy is held to."""
+    return "\r\n".join([
+        "// Made by tools/make_exe.py from codex_compat_report.py. Do not edit.",
+        "namespace CodexCompatReporter",
+        "{",
+        "    internal static class Embedded",
+        "    {",
+        '        internal const string Resource = "%s";' % RESOURCE,
+        '        internal const string Sha256 = "%s";' % hashlib.sha256(script_bytes(root)).hexdigest(),
+        "    }",
+        "}",
+        "",
+    ])
+
+
 def manifest_bytes(root: pathlib.Path = ROOT) -> bytes:
     """gui/Report.manifest as it is embedded: with CRLF line endings, however it was checked out."""
     return (root / MANIFEST).read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
@@ -110,12 +140,20 @@ def build(out: pathlib.Path, root: pathlib.Path = ROOT) -> pathlib.Path:
     with tempfile.TemporaryDirectory(prefix="report-exe-") as work:
         info = pathlib.Path(work) / "Report.VersionInfo.cs"
         info.write_bytes(version_source(root).encode("ascii"))
+        embedded = pathlib.Path(work) / "Report.Embedded.cs"
+        embedded.write_bytes(embedded_source(root).encode("ascii"))
         manifest = pathlib.Path(work) / "Report.manifest"
         manifest.write_bytes(manifest_bytes(root))
+        # csc reads /resource:<file>,<name>: the script is given from here, under a path with no comma.
+        script = pathlib.Path(work) / SCRIPT
+        script.write_bytes(script_bytes(root))
+        if "," in str(script):
+            raise SystemExit("the temporary folder's path holds a comma, which csc would misread: %s" % script)
         arguments = [str(csc), "/nologo", "/utf8output", "/target:winexe", "/platform:anycpu", "/optimize+",
-                     "/warn:4", "/warnaserror+", "/out:" + str(exe), "/win32manifest:" + str(manifest)]
+                     "/warn:4", "/warnaserror+", "/out:" + str(exe), "/win32manifest:" + str(manifest),
+                     "/resource:%s,%s" % (script, RESOURCE)]
         arguments += ["/reference:" + reference for reference in REFERENCES]
-        arguments += [str(root / source) for source in SOURCES] + [str(info)]
+        arguments += [str(root / source) for source in SOURCES] + [str(info), str(embedded)]
         done = subprocess.run(arguments, capture_output=True, stdin=subprocess.DEVNULL,
                               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     if done.returncode:

@@ -30,8 +30,10 @@
 // would fit the window to instead: a condition asked for is brought about, or nothing is drawn.
 //
 // And one that reads this machine, to say where the window would take the reporter from, and starts
-// nothing: Report.exe --where prints, as JSON, the folder it counts as its own, the script it would run,
-// the Python it would run it with, and what it would say is missing.
+// nothing: Report.exe --where puts the reporter it carries in its folder, as the window does when it
+// opens, and prints, as JSON, the folder it counts as its own and its file name, the SHA-256 of the
+// script it carries, the copy it would run and the folder it would run it in, the Python it would run it
+// with, and what it would say is missing.
 //
 // C# 5 only: this is compiled by the in-box csc (tools/make_exe.py).
 using System;

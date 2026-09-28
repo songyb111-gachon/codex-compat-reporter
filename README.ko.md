@@ -13,19 +13,18 @@ JSON 파일 하나로 만들어 프로젝트에 보내는 작은 윈도우 도�
 ## 빠른 시작
 
 1. [최신 릴리스](https://github.com/songyb111-gachon/codex-compat-reporter/releases/latest)에서
-   `codex-compat-reporter-<버전>.zip`을 받아 압축을 풉니다. 파일을 마우스 오른쪽 단추로 누르고
-   **모두 압축 풀기**를 고르세요.
-2. 풀린 폴더의 `Report.exe`를 두 번 누릅니다. Codex Auto Resume이 함께 설치한 파이썬으로 보고 도구를
-   돌리므로 더 설치할 것은 없습니다.
+   `CodexCompatReporter-<버전>.exe`를 받아 두 번 누릅니다. 보고 도구가 이 파일 하나에 통째로 들어 있고,
+   Codex Auto Resume이 함께 설치한 파이썬으로 돌아가므로 압축을 풀 것도, 더 설치할 것도 없습니다.
 
    처음에는 Windows가 **Windows의 PC 보호** 창을 띄울 수 있습니다. 인터넷에서 받은 프로그램인데 서명이
    없어서입니다. **추가 정보**를 누른 뒤 **실행**을 고르세요. 이 파일이 어디서 왔는지는 릴리스가
-   증명합니다. `gh attestation verify <그 ZIP> --repo songyb111-gachon/codex-compat-reporter`를 실행하면
-   그 ZIP이 이 저장소의 워크플로가 GitHub에서 릴리스 태그로 만든 것임이 확인되고, 어느 실행과 커밋이
-   만들었는지도 나옵니다([받기](#받기) 참고).
-3. **Next**를 눌러 다섯 쪽을 차례로 넘깁니다. 이 PC가 보여 줄 수 있는 것을 보여 주고, GitHub CLI가
-   로그인한 깃허브 아이디를 채워 두고, 보고서를 쓴 뒤 파일 전체를 보여 줍니다. 읽어 보세요. 짧습니다.
-4. 보내려면 **I have read it**(읽었음)에 표시하고 **Send**를 누릅니다. 한 번 더 묻는데, 기본 답은
+   증명합니다. `gh attestation verify CodexCompatReporter-<버전>.exe --repo songyb111-gachon/codex-compat-reporter`를
+   실행하면 그 파일이 이 저장소의 워크플로가 GitHub에서 릴리스 태그로 만든 것임이 확인되고, 어느 실행과
+   커밋이 만들었는지도 나옵니다([받기](#받기) 참고).
+2. **Next**를 눌러 다섯 쪽을 차례로 넘깁니다. 이 PC가 보여 줄 수 있는 것을 보여 주고, GitHub CLI가
+   로그인한 깃허브 아이디를 채워 두고, 프로그램이 있는 폴더에 보고서를 쓴 뒤 파일 전체를 보여 줍니다.
+   읽어 보세요. 짧습니다.
+3. 보내려면 **I have read it**(읽었음)에 표시하고 **Send**를 누릅니다. 한 번 더 묻는데, 기본 답은
    취소(Cancel)입니다. 그 밖의 어떤 선택도 아무것도 보내지 않고, 파일은 쓴 자리에 그대로 남습니다.
    GitHub CLI가 로그인되어 있지 않으면, 마지막 쪽이 웹에서 파일을 보내는 방법을 단계별로 알려 주고,
    입력할 값마다 옆에 **Copy**(복사) 단추를 둡니다.
@@ -43,6 +42,15 @@ JSON 파일 하나로 만들어 프로젝트에 보내는 작은 윈도우 도�
 그림은 창이 가상의 PC에서 각 쪽을 직접 그린 것입니다. 아래 안내 그림과 같은 PC로, 아이디는
 ExampleUser이고 기록은 누구의 것도 아닙니다. [tools/make_window_pictures.py](tools/make_window_pictures.py)가
 만들며, 그림을 만들면서 보낸 것은 없습니다. 창의 문구는 영어입니다.
+
+### 두 번째 방법: ZIP
+
+같은 릴리스에는 `codex-compat-reporter-<버전>.zip`도 있습니다. 받아서 압축을 푸세요. 파일을 마우스
+오른쪽 단추로 누르고 **모두 압축 풀기**를 고르면 됩니다. 풀린 폴더의 `Report.exe`가 바로 위의 그
+프로그램입니다. ZIP 안에서 부르는 이름만 다를 뿐 바이트 하나까지 같으니, 두 번 누르고 2단계부터 이어 가면
+됩니다. 이 파일에도 **Windows의 PC 보호** 창이 뜰 수 있고, 답하는 방법도 같습니다. 옆에는 같은 안내를
+콘솔 창에서 하는 `Report.cmd`(아래), 보고 도구 자체인 `codex_compat_report.py`, 그리고 이것들을 설명하는
+문서가 함께 있습니다.
 
 ## Report.cmd: 콘솔 창에서 같은 안내
 
@@ -69,18 +77,25 @@ ExampleUser이고 기록은 누구의 것도 아닙니다. [tools/make_window_pi
 
 ## 받기
 
-빠른 시작의 릴리스 ZIP에는 이 파일과 함께, 창인 `Report.exe`와 아래의 `guide`를 실행하는
-`Report.cmd`가 들어 있습니다. 릴리스마다 GitHub Actions가 태그에서 만들고, ZIP 옆에 SHA-256과 빌드
-증명(attestation)을 둡니다. `gh attestation verify <그 ZIP> --repo songyb111-gachon/codex-compat-reporter`가
-어느 워크플로 실행과 커밋이 만들었는지 알려 줍니다. `Report.exe`도 그 실행 안에서
+빠른 시작의 릴리스에서 시작하는 길은 둘입니다. 창 하나로 된 `CodexCompatReporter-<버전>.exe`, 그리고
+이 파일과 함께 `Report.exe` - 바이트 하나까지 같은 그 창 - 와 아래의 `guide`를 실행하는 `Report.cmd`가
+든 ZIP입니다. 릴리스마다 GitHub Actions가 태그에서 만들고, 파일마다 옆에 SHA-256을 두며, 두 파일을 함께
+담은 빌드 증명(attestation)을 하나 둡니다.
+`gh attestation verify <그 파일> --repo songyb111-gachon/codex-compat-reporter`가 어느 워크플로 실행과
+커밋이 만들었는지 알려 줍니다. `Report.exe`도 그 실행 안에서
 [tools/make_exe.py](tools/make_exe.py)가 [gui/](gui/)로부터 컴파일합니다. 모든 Windows에 들어 있는
 .NET Framework 4.8의 C# 컴파일러를 쓰며, 같은 소스와 같은 컴파일러는 같은 바이트를 내므로 태그에서 다시
 만들어 비교할 수 있습니다.
 
-`Report.exe`는 스스로 아무것도 정하지 않습니다. 옆에 있는 `codex_compat_report.py`를 `Report.cmd`가
-쓸 파이썬으로, 격리 모드에 콘솔 창 없이 실행하고, 이 파일이 `--json`으로 답한 것 - `survey`, `login`,
-`report --keep --json`, `submit --json`, `web-steps --json`이 각각 JSON 객체 하나로 - 을 보여 줄
-뿐입니다. 창과 안내는 같은 함수가 만든 같은 문장을 말하고, 보고서와 보내기의 모든 바이트는 이 파일의
+`Report.exe`는 스스로 아무것도 정하지 않습니다. 릴리스 태그 그대로의 `codex_compat_report.py`를 그
+SHA-256과 함께 안에 품고 있어서 혼자서도 돌아가고, ZIP 안에서도 옆의 파일이 아니라 품고 있는 사본만
+실행합니다. 사본은 내 폴더인 `%LOCALAPPDATA%\codex-compat-reporter\` 아래, 그 SHA-256의 앞 16자리를
+이름으로 한 폴더에 둡니다. 거기 파일이 없거나 바이트가 다르면 다시 쓰고, 파이썬을 시작하기 직전마다 한 번
+더 읽어 그 바이트가 아니면 아무것도 실행하지 않습니다. 그 폴더에 쓸 수 없으면 창이 그렇다고 알리고 아무것도
+실행하지 않습니다. 사본은 `Report.cmd`가 쓸 파이썬으로, 격리 모드에 콘솔 창 없이, 프로그램이 있는 폴더에서
+실행합니다. 그래서 보고서는 그 폴더에 써지고, 프로그램 옆의 `gh.exe`는 절대 쓰지 않습니다. 창은 이 파일이
+`--json`으로 답한 것 - `survey`, `login`, `report --keep --json`, `submit --json`, `web-steps --json`이
+각각 JSON 객체 하나로 - 을 보여 줄 뿐입니다. 창과 안내는 같은 함수가 만든 같은 문장을 말하고, 보고서와 보내기의 모든 바이트는 이 파일의
 것입니다.
 
 표준 라이브러리만 쓰는 파이썬 파일 하나이고, 설치할 것은 없습니다. 저장소를 받아 그 폴더에서
@@ -176,7 +191,8 @@ python codex_compat_report.py submit <그 파일> --yes              # PR 열기
 그렇게 적혀 있습니다.
 
 내 PC에 쓰는 것은 보고서 파일뿐이고, `submit --yes` 동안에만 업로드할 내용의 임시 사본을 임시
-폴더에 두었다가 보내는 즉시 지웁니다. WAL 모드인 SQLite 데이터베이스를 읽으면 SQLite가 공유 메모리
+폴더에 두었다가 보내는 즉시 지웁니다. `Report.exe`는 여기에 파일 하나만 더 씁니다. 이 파일의 자기 사본을
+`%LOCALAPPDATA%\codex-compat-reporter\`에 둡니다([받기](#받기) 참고). WAL 모드인 SQLite 데이터베이스를 읽으면 SQLite가 공유 메모리
 색인(`-shm` 파일)을 갱신할 수 있습니다. 제품 자체의 읽기도 마찬가지이고, 데이터베이스 자체에는
 아무것도 쓰지 않습니다. `guide`는 보고서를 메모장으로, 프로젝트 페이지를 브라우저로 여는데, 둘 다 '예'라고 할 때만
 엽니다. `Report.exe`는 **Open in Notepad**를 누를 때만 메모장을 열고, 프로젝트 페이지나 - 보낸 뒤에는 -

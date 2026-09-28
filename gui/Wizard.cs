@@ -488,9 +488,11 @@ namespace CodexCompatReporter
             }
         }
 
+        // Windows' own SHA-256 through CNG: FIPS-approved, and - unlike the CryptoAPI one - loaded whatever
+        // SystemRoot says, so hashing never fails where the environment names no Windows folder.
         internal static string Sha256(byte[] bytes)
         {
-            using (SHA256CryptoServiceProvider sha = new SHA256CryptoServiceProvider())
+            using (SHA256Cng sha = new SHA256Cng())
             {
                 StringBuilder hex = new StringBuilder();
                 foreach (byte b in sha.ComputeHash(bytes))
@@ -762,7 +764,7 @@ namespace CodexCompatReporter
             Words("nothing", Nothing);
             if (!core.Found || noPython)
             {
-                Said("missing", noPython ? LiveCore.NoPython : core.Missing, "Why the reporter cannot run");
+                Said("missing", noPython ? core.WithoutPython : core.Missing, "Why the reporter cannot run");
             }
             else if (surveyRefused != null)
             {

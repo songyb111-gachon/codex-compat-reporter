@@ -13,14 +13,14 @@ runs when it is double-clicked: the other three, one question at a time, and not
 person types `send`.
 
 --json is the machine interface a window speaks to this file through - Report.exe, built from gui/ by
-tools/make_exe.py, is that window: the command prints exactly one
-JSON object on stdout and nothing else - {"ok": true, ...} with what the command found or did, or
-{"ok": false, "refused": <the sentence the console prints>, "exit": <its exit code>}, which after a
-send that had begun also carries "written", the list the console prints. Exit codes are unchanged.
-`survey` (always JSON) is what `status` and the guide's first two steps show; `login` (always JSON)
-takes a login as the guide's second step does; `report --keep` keeps a file already there as the
-guide's third step does; `web-steps` is how the guide says to send a report on the web. The words
-and the JSON come from the same functions, so the two cannot say different things.
+tools/make_exe.py with this file inside it, is that window, and runs its own copy of it: the command
+prints exactly one JSON object on stdout and nothing else - {"ok": true, ...} with what the command
+found or did, or {"ok": false, "refused": <the sentence the console prints>, "exit": <its exit
+code>}, which after a send that had begun also carries "written", the list the console prints. Exit
+codes are unchanged. `survey` (always JSON) is what `status` and the guide's first two steps show;
+`login` (always JSON) takes a login as the guide's second step does; `report --keep` keeps a file
+already there as the guide's third step does; `web-steps` is how the guide says to send a report on
+the web. The words and the JSON come from the same functions, so the two cannot say different things.
 
 What it reads, on this machine only and read-only: the product's own installation - its plugin
 manifest, its log and the five rotated copies of it, its state database and the compatibility
@@ -69,7 +69,7 @@ import tempfile
 import time
 import traceback
 
-__version__ = "1.4.0"
+__version__ = "1.4.1"
 
 REPO = "songyb111-gachon/codex-auto-resume-windows"
 HOST = "github.com"                             # every GitHub call names it; GH_HOST never redirects one
@@ -959,7 +959,9 @@ def _same_folder(entry: pathlib.Path, folder: pathlib.Path) -> bool:
 def find_gh(path: str | None = None):
     """gh.exe from an absolute PATH entry, or None. Never the current folder, nor the folder this
     script sits in, however PATH spells them (`.`, `.\\`, `..`, an absolute path, an 8.3 name): Windows
-    would otherwise start a gh.exe that sits beside a downloaded script before the real one."""
+    would otherwise start a gh.exe that sits beside a downloaded script before the real one. Report.exe
+    runs its copy of this file in the folder it is in itself, so the folder it was downloaded to is the
+    current one here, and left out as well."""
     unsafe = [pathlib.Path.cwd(), pathlib.Path(__file__).resolve().parent]
     for entry in (os.environ.get("PATH", "") if path is None else path).split(os.pathsep):
         entry = entry.strip().strip('"')

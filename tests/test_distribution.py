@@ -4,9 +4,14 @@
   current folder, nor the one in it or beside Report.cmd - isolated and in UTF-8, and always waits
   before its window closes (ReportCmdTests);
 - the release ZIP holds the seven files a reporter needs and nothing else - Report.exe only when it says
-  it is the tool's version - the same bytes from the same tree (ReleaseZipTests); the workflow that
-  publishes it builds from the tag alone, Report.exe included, keeps write access where none of the
-  repository's code runs, leaves no token on disk, and attests what it publishes (ReleaseWorkflowTests);
+  it is the tool's version - the same bytes from the same tree, and beside it the program on its own,
+  CodexCompatReporter-<version>.exe, byte for byte the ZIP's Report.exe (ReleaseZipTests); the workflow
+  that publishes them builds from the tag alone, Report.exe included, keeps write access where none of
+  the repository's code runs, leaves no token on disk, checks the program on its own against the ZIP's,
+  and attests both before it publishes the four files (ReleaseWorkflowTests);
+- both READMEs start with the program on its own, CodexCompatReporter-<version>.exe, and give the ZIP,
+  with Report.cmd, as the second way, keeping every section they had and naming no version of the
+  tool in their running text (ReadmeTests);
 - every picture the READMEs show is there, the window's in the quick start and the console's where
   Report.cmd is, carries the text it shows and nothing else, and the console's text is exactly what the
   guide prints today against the tests' fixture: its values, and no one else's (PictureTests). The
@@ -283,12 +288,32 @@ class ReleaseZipTests(unittest.TestCase):
     def test_the_same_tree_gives_the_same_bytes(self):
         with tempfile.TemporaryDirectory() as one, tempfile.TemporaryDirectory() as two:
             first, second = self.build(one), self.build(two)
-            self.assertEqual(first.read_bytes(), second.read_bytes())
-            digest = hashlib.sha256(first.read_bytes()).hexdigest()
-            self.assertEqual((pathlib.Path(one) / (first.name + ".sha256")).read_bytes(),
-                             ("%s  %s\n" % (digest, first.name)).encode("ascii"))
             self.assertEqual(sorted(path.name for path in pathlib.Path(one).iterdir()),
-                             [first.name, first.name + ".sha256"])
+                             sorted(make_release.assets(reporter.__version__)))
+            for name in make_release.assets(reporter.__version__):
+                with self.subTest(name):
+                    self.assertEqual((pathlib.Path(one) / name).read_bytes(), (pathlib.Path(two) / name).read_bytes())
+            self.assertEqual(first.read_bytes(), second.read_bytes())
+            for made in (first, pathlib.Path(one) / make_release.standalone_of(reporter.__version__)):
+                digest = hashlib.sha256(made.read_bytes()).hexdigest()
+                self.assertEqual((made.parent / (made.name + ".sha256")).read_bytes(),
+                                 ("%s  %s\n" % (digest, made.name)).encode("ascii"))
+
+    def test_the_program_on_its_own_is_the_zips_report_exe_byte_for_byte(self):
+        """Report.exe carries the reporter inside it (tools/make_exe.py), so the one file runs on its own:
+        the release publishes it beside the ZIP under a name of its own, and it is the same file."""
+        version = reporter.__version__
+        self.assertEqual(make_release.standalone_of(version), "CodexCompatReporter-%s.exe" % version)
+        self.assertEqual(make_release.assets(version),
+                         ("codex-compat-reporter-%s.zip" % version, "codex-compat-reporter-%s.zip.sha256" % version,
+                          "CodexCompatReporter-%s.exe" % version, "CodexCompatReporter-%s.exe.sha256" % version))
+        with tempfile.TemporaryDirectory() as out:
+            target = self.build(out)
+            alone = pathlib.Path(out) / make_release.standalone_of(version)
+            with zipfile.ZipFile(target) as archive:
+                packed = archive.read("%s/%s" % (make_release.name_of(version), make_release.EXE))
+            self.assertEqual(alone.read_bytes(), packed)
+            self.assertEqual(alone.read_bytes(), (self.tree / make_release.EXE).read_bytes())
 
     def test_it_holds_the_seven_files_as_they_are_and_nothing_else(self):
         folder = "codex-compat-reporter-%s" % reporter.__version__
@@ -467,21 +492,35 @@ class ReleaseWorkflowTests(unittest.TestCase):
             with self.subTest("release.yml:%d" % number):
                 self.assertNotIn("${{", line)
 
-    def test_one_step_attests_the_zip_after_it_is_checked_and_before_it_is_published(self):
+    def test_one_step_attests_the_zip_and_the_program_after_they_are_checked_and_before_they_are_published(self):
         source, publish = workflow(), job("publish")
         self.assertEqual(source.count("uses: actions/attest-build-provenance@"), 1)
-        self.assertIn("subject-path: ${{ env.ZIP }}", step(publish, "Attest the ZIP"))
-        self.assertIn("      ZIP: dist/codex-compat-reporter-${{ needs.build.outputs.version }}.zip\n", publish)
+        attest = step(publish, "Attest the ZIP and the program")
+        # One attestation naming both files: subject-path takes one path a line.
+        self.assertIn("          subject-path: |\n            ${{ env.ZIP }}\n            ${{ env.EXE }}\n", attest + "\n")
+        self.assertEqual(re.findall(r"\$\{\{ env\.([A-Z]+) \}\}", attest), ["ZIP", "EXE"])
         order = [publish.index("- name: %s\n" % name) for name in
-                 ("Take what the build job made", "Check it again, here", "Attest the ZIP", "Publish the release")]
+                 ("Take what the build job made", "Check it again, here", "Attest the ZIP and the program",
+                  "Publish the release")]
         self.assertEqual(order, sorted(order))
 
-    def test_one_release_carries_the_zip_and_its_checksum_with_the_tags_message(self):
+    def test_the_files_it_names_are_the_ones_make_release_writes(self):
+        publish, version = job("publish"), "${{ needs.build.outputs.version }}"
+        zip_name, _zip_sum, exe_name, _exe_sum = make_release.assets(version)
+        self.assertIn("      ZIP: dist/%s\n" % zip_name, publish)
+        self.assertIn("      EXE: dist/%s\n" % exe_name, publish)
+        # What the build job hands over: the ZIP, the program, their checksums and the notes.
+        kept = step(job("build"), "Keep what was built for the publish job")
+        self.assertEqual(re.findall(r"(?m)^            (dist/\S+)$", kept),
+                         ["dist/*.zip", "dist/*.exe", "dist/*.sha256", "dist/release-notes.md"])
+
+    def test_one_release_carries_the_zip_the_program_and_their_checksums_with_the_tags_message(self):
         source = workflow()
         self.assertEqual(source.count("gh release create"), 1)
         command = step(job("publish"), "Publish the release")
         create = command[command.index("gh release create"):]
-        self.assertEqual(re.findall(r'"(\$[A-Z]+(?:\.sha256)?)"', create.split("--")[0]), ["$ZIP", "$ZIP.sha256"])
+        self.assertEqual(re.findall(r'"(\$[A-Z]+(?:\.sha256)?)"', create.split("--")[0]),
+                         ["$ZIP", "$ZIP.sha256", "$EXE", "$EXE.sha256"])
         self.assertIn("--notes-file dist/release-notes.md", create)
         self.assertIn("--verify-tag", create)
         notes = step(job("build"), "Take the release notes from the tag's message")
@@ -495,6 +534,11 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertEqual(tuple(listed), make_release.FILES)
         self.assertIn('sha256sum "$ZIP"', check)
         self.assertIn('"$GITHUB_REF" == "refs/tags/v$VERSION"', check)
+        # The program on its own: its checksum, and the very bytes of the ZIP's Report.exe.
+        self.assertIn('cut -d\' \' -f1 "$EXE.sha256"', check)
+        self.assertIn('sha256sum "$EXE"', check)
+        self.assertIn('unzip -p "$ZIP" "$folder/Report.exe" | cmp -s - "$EXE" || {', check)
+        self.assertLess(check.index('folder="codex-compat-reporter-$VERSION"'), check.index('unzip -p "$ZIP"'))
 
     def test_the_build_job_tests_the_tag_and_stamps_the_zip_with_its_commits_time(self):
         build = job("build")
@@ -509,7 +553,8 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("runs-on: windows-latest", build, "the compiler is part of Windows")
         self.assertIn("run: python tools/make_exe.py\n", step(build, "Build Report.exe"))
         self.assertLess(build.index("- name: Build Report.exe\n"), build.index("- name: Run the tests\n"))
-        self.assertLess(build.index("- name: Run the tests\n"), build.index("- name: Build the ZIP\n"))
+        self.assertLess(build.index("- name: Run the tests\n"),
+                        build.index("- name: Build the ZIP and the program on its own\n"))
         self.assertIn(make_release.EXE, make_release.FILES)
 
     def test_ci_compiles_report_exe_on_its_own(self):
@@ -525,6 +570,47 @@ class ReleaseWorkflowTests(unittest.TestCase):
             with self.subTest(action):
                 self.assertTrue(action.startswith("actions/"))
                 self.assertRegex(pin, r"\A[0-9a-f]{40}\Z")
+
+
+# ------------------------------------------------------------------------------- the READMEs
+# Each README's headings, in order: the English ones, and the Korean ones, which follow them one for one.
+HEADINGS = ["## Quick start", "### Or the ZIP", "## Report.cmd: the same guide in a console window", "## Get it",
+            "## Use it", "### Commands and options", "### Exit codes", "## What it reads",
+            "## What the report carries, and what is published", "## What `submit` does on GitHub",
+            "## What happens after `submit`", "## What a report can and cannot do", "## When the project takes reports"]
+KO_HEADINGS = ["## 빠른 시작", "### 두 번째 방법: ZIP", "## Report.cmd: 콘솔 창에서 같은 안내", "## 받기", "## 쓰기",
+               "### 명령과 옵션", "### 종료 코드", "## 무엇을 읽는가", "## 보고서에 담기는 것, 공개되는 것",
+               "## `submit`이 GitHub에서 하는 일", "## `submit` 다음에 일어나는 일", "## 보고서가 할 수 있는 일과 없는 일",
+               "## 프로젝트가 보고서를 받을 때"]
+
+
+class ReadmeTests(unittest.TestCase):
+    def test_every_section_is_kept_in_both(self):
+        for readme, headings in zip(READMES, (HEADINGS, KO_HEADINGS)):
+            with self.subTest(readme.name):
+                found = re.findall(r"(?m)^#{2,3} .*$", readme.read_text(encoding="utf-8").replace("\r\n", "\n"))
+                self.assertEqual(found, headings)
+        self.assertEqual([heading.split()[0] for heading in HEADINGS], [heading.split()[0] for heading in KO_HEADINGS])
+
+    def test_the_quick_start_starts_with_the_program_on_its_own_and_the_zip_is_the_second_way(self):
+        for readme, placeholder, start, second, warning in (
+                (READMES[0], "<version>", HEADINGS[0], HEADINGS[1], "**Windows protected your PC**"),
+                (READMES[1], "<버전>", KO_HEADINGS[0], KO_HEADINGS[1], "**Windows의 PC 보호**")):
+            with self.subTest(readme.name):
+                text = readme.read_text(encoding="utf-8").replace("\r\n", "\n")
+                quick = text[text.index("\n%s\n" % start):text.index("\n## Report.cmd")]
+                first = quick.split("\n1. ", 1)[1].split("\n2. ", 1)[0]
+                program = make_release.standalone_of(placeholder)
+                self.assertIn("`%s`" % program, first, "step 1 is the program on its own")
+                self.assertNotIn(".zip", first)
+                self.assertIn(warning, first, "and what Windows may say of it")
+                self.assertIn("gh attestation verify %s --repo songyb111-gachon/codex-compat-reporter" % program, first)
+                zipped = quick[quick.index("\n%s\n" % second):]
+                self.assertIn("`%s.zip`" % make_release.name_of(placeholder), zipped)
+                for name in ("`Report.exe`", "`Report.cmd`", warning):
+                    self.assertIn(name, zipped)
+                self.assertLess(quick.index(first), quick.index(second))
+                self.assertNotIn(reporter.__version__, text, "no version of the tool in running text")
 
 
 # ------------------------------------------------------------------------------ the pictures

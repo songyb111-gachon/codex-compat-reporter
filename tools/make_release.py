@@ -1,11 +1,14 @@
-"""The release ZIP: the seven files a reporter needs, packed the same way every time.
+"""The release: the ZIP of the seven files a reporter needs, packed the same way every time, and
+Report.exe on its own.
 
     python tools/make_exe.py                                    # Report.exe, beside codex_compat_report.py
-    python tools/make_release.py --version 1.4.0 --out dist
+    python tools/make_release.py --version 1.4.1 --out dist
 
 It writes codex-compat-reporter-<version>.zip, holding FILES under one folder of that name and
-nothing else, and beside it <that name>.sha256 in sha256sum's format. .github/workflows/release.yml
-runs both on the tagged tree and publishes the ZIP and its checksum.
+nothing else, and CodexCompatReporter-<version>.exe, the very bytes of the Report.exe in that ZIP,
+under a name of its own: Report.exe carries the reporter inside it (tools/make_exe.py), so it runs
+downloaded on its own as well as unzipped. Beside each is <its name>.sha256 in sha256sum's format.
+.github/workflows/release.yml runs both tools on the tagged tree and publishes the four files.
 
 Report.exe is the one file the tree does not hold: tools/make_exe.py compiles it from gui/, and this
 refuses to pack one that is missing or says it is another version than codex_compat_report.py's.
@@ -35,6 +38,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 FILES = ("codex_compat_report.py", "Report.exe", "Report.cmd", "README.md", "README.ko.md", "LICENSE",
          "docs/REPORT_FORMAT.md")
 EXE = "Report.exe"                      # a build output of tools/make_exe.py, never in the repository
+STANDALONE = "CodexCompatReporter-%s.exe"   # the same bytes, published beside the ZIP
 VERSION = re.compile(r"\A\d+\.\d+\.\d+\Z")
 EARLIEST = 315532800            # 1980-01-01T00:00:00Z: a ZIP cannot hold an earlier time
 
@@ -49,6 +53,23 @@ def declared(root: pathlib.Path = ROOT) -> str:
 
 def name_of(version: str) -> str:
     return "codex-compat-reporter-%s" % version
+
+
+def standalone_of(version: str) -> str:
+    return STANDALONE % version
+
+
+def assets(version: str) -> tuple:
+    """What a release publishes, in the order it is published: the ZIP, the program on its own, and
+    the checksum beside each."""
+    zip_name, exe_name = name_of(version) + ".zip", standalone_of(version)
+    return zip_name, zip_name + ".sha256", exe_name, exe_name + ".sha256"
+
+
+def checksum(path: pathlib.Path) -> None:
+    """<path>.sha256 beside it, in sha256sum's format."""
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    (path.parent / (path.name + ".sha256")).write_bytes(("%s  %s\n" % (digest, path.name)).encode("ascii"))
 
 
 def product_version(raw: bytes) -> str | None:
@@ -71,7 +92,7 @@ def product_version(raw: bytes) -> str | None:
 
 
 def build(version: str, out: pathlib.Path, epoch: int | None = None, root: pathlib.Path = ROOT) -> pathlib.Path:
-    """Write the ZIP and its .sha256 into `out`; the ZIP's path."""
+    """Write the ZIP, the program on its own and a .sha256 beside each into `out`; the ZIP's path."""
     if not VERSION.match(version):
         raise SystemExit("%r is not MAJOR.MINOR.PATCH" % version)
     if version != declared(root):
@@ -80,7 +101,8 @@ def build(version: str, out: pathlib.Path, epoch: int | None = None, root: pathl
     if missing:
         raise SystemExit("missing: %s%s" % (", ".join(missing), " (python tools/make_exe.py makes Report.exe)"
                                                                   if EXE in missing else ""))
-    said = product_version((root / EXE).read_bytes())
+    program = (root / EXE).read_bytes()          # read once: the ZIP's Report.exe and the one on its own
+    said = product_version(program)
     if said != version:
         raise SystemExit("Report.exe says it is %s, not %s: make it again from this tree with python "
                          "tools/make_exe.py" % (said or "no version", version))
@@ -95,9 +117,11 @@ def build(version: str, out: pathlib.Path, epoch: int | None = None, root: pathl
             entry.compress_type = zipfile.ZIP_STORED
             entry.create_system = 3                     # the same on every system that builds it
             entry.external_attr = 0o100644 << 16        # a plain file, readable by everyone
-            archive.writestr(entry, (root / name).read_bytes())
-    digest = hashlib.sha256(target.read_bytes()).hexdigest()
-    (out / (target.name + ".sha256")).write_bytes(("%s  %s\n" % (digest, target.name)).encode("ascii"))
+            archive.writestr(entry, program if name == EXE else (root / name).read_bytes())
+    checksum(target)
+    alone = out / standalone_of(version)
+    alone.write_bytes(program)
+    checksum(alone)
     return target
 
 
@@ -109,8 +133,10 @@ def main(argv=None) -> int:
     epoch = os.environ.get("SOURCE_DATE_EPOCH")
     if epoch is not None and not epoch.isdigit():
         raise SystemExit("SOURCE_DATE_EPOCH is not a number of seconds: %r" % epoch)
-    target = build(arguments.version or declared(), pathlib.Path(arguments.out), int(epoch) if epoch else None)
-    print("%s  %s" % (hashlib.sha256(target.read_bytes()).hexdigest(), target))
+    version = arguments.version or declared()
+    target = build(version, pathlib.Path(arguments.out), int(epoch) if epoch else None)
+    for made in (target, target.parent / standalone_of(version)):
+        print("%s  %s" % (hashlib.sha256(made.read_bytes()).hexdigest(), made))
     return 0
 
 
