@@ -10,6 +10,9 @@ codex_compat_report.py answered through its --json interface. What it promises, 
   when it is not there or not those bytes, checked again before every start of Python, and said so in the window,
   never a crash, when that folder cannot be written; in its own folder, so a gh.exe beside it is never
   run - one file that works in the ZIP and on its own (CarriedTests);
+- it loads no DLL from the folder it is in, nor from the current one - Downloads, where a DLL named as one
+  of Windows' own could be waiting - but from System32, the first thing Main does, or it runs nothing
+  (DllTests);
 - it finds Python where Report.cmd finds it, in Report.cmd's order and with its flags, from the folder it
   is in whatever that folder is called, and starts it with no console, no shell and nothing to read
   from, isolated and in UTF-8 (PythonTests);
@@ -31,8 +34,8 @@ codex_compat_report.py answered through its --json interface. What it promises, 
   the scroll bar of a box that scrolls, and what the ZIP packs is a Report.exe of the tool's version
   (PictureTests).
 
-Report.exe is only ever run here with --fixture, or with --where, which starts nothing, under homes of
-the tests' own: its answers are made in this process by the reporter's own functions against the tests'
+Report.exe is only ever run here with --fixture, or with --where or --loaded-modules, which start
+nothing, under homes of the tests' own: its answers are made in this process by the reporter's own functions against the tests'
 made-up installation, with gh played by FakeGh, so Report.exe starts no Python and reads nothing of this
 machine. The one Python the tests start runs the copy Report.exe wrote, against that made-up
 installation, with only the tests' own stand-ins for gh on PATH. A missing C# compiler skips the tests that need Report.exe on
@@ -656,6 +659,113 @@ class CarriedTests(unittest.TestCase):
         # What the working folder keeps out: run from anywhere else, the gh.exe beside the program is taken.
         said, ran = survey(str(self.here), str(elsewhere))
         self.assertEqual((said["gh"]["path"], ran), (str(planted), [self.here.name]))
+
+
+# --------------------------------------------------------------------------------- DLLs
+# Windows' own DLLs, copied beside Report.exe as a DLL of one of their names could be waiting in Downloads:
+# the four the window loaded from its own folder before it took DLLs from System32 alone (bcrypt, profapi,
+# CRYPTSP, CRYPTBASE), more that a program of WinForms and CNG loads or could, and the two its own code
+# calls into. Copies of Windows' own files and nothing else, into a temporary folder the tests delete.
+PLANTED = ("bcrypt.dll", "profapi.dll", "CRYPTSP.dll", "CRYPTBASE.dll", "version.dll", "uxtheme.dll", "dwmapi.dll",
+           "winmm.dll", "secur32.dll", "sspicli.dll", "wtsapi32.dll", "mscoree.dll", "kernel32.dll", "user32.dll")
+
+
+def system32() -> pathlib.Path:
+    """Windows' System32 as Report.exe sees it: a 64-bit program on 64-bit Windows, whose System32 a 32-bit
+    Python sees only as Sysnative."""
+    windows = pathlib.Path(os.environ.get("SystemRoot") or os.environ.get("WINDIR") or "C:\\Windows")
+    native = windows / "Sysnative"
+    return native if native.is_dir() else windows / "System32"
+
+
+def same(one, other) -> bool:
+    return os.path.normcase(str(pathlib.Path(one).resolve())) == os.path.normcase(str(pathlib.Path(other).resolve()))
+
+
+class DllTests(unittest.TestCase):
+    """Report.exe is downloaded, and started from Downloads, where anything else downloaded lies too. Windows
+    looks for a DLL that is not one of its KnownDLLs in the program's own folder first, and a program of
+    .NET Framework loads a few that are not - bcrypt, CRYPTSP, CRYPTBASE and profapi, for a SHA-256 and a
+    profile path - so a DLL of one of those names beside it would run as the window started. The first
+    thing Main does is tell Windows to load DLLs from System32 alone, and stop when it cannot."""
+
+    maxDiff = None
+
+    def setUp(self):
+        self.base = pathlib.Path(tempfile.mkdtemp(prefix="dlls-", dir=WORK.name))
+        self.here = self.base / "Downloads"
+        self.current = self.base / "current"
+        self.exe = self.here / ("CodexCompatReporter-%s.exe" % reporter.__version__)
+        for folder in (self.here, self.current):
+            folder.mkdir()
+        shutil.copy2(report_exe(), self.exe)
+        self.copied = []
+        for name in PLANTED:
+            source = system32() / name
+            if source.is_file():
+                for folder in (self.here, self.current):
+                    shutil.copy2(source, folder / name)
+                self.copied.append(name)
+
+    def loaded(self, current: pathlib.Path) -> list:
+        """What Report.exe --loaded-modules prints, started from `current`, under homes of the test's own."""
+        home = self.base / "home"
+        environment = dict(os.environ, USERPROFILE=str(home), LOCALAPPDATA=str(home / "Local"),
+                           APPDATA=str(home / "Roaming"), CODEX_AUTO_RESUME_HOME=str(home / "car"),
+                           CODEX_HOME=str(home / "codex"), GH_CONFIG_DIR=str(home / "gh"), PATH="")
+        done = subprocess.run([str(self.exe), "--loaded-modules"], capture_output=True, cwd=str(current),
+                              stdin=subprocess.DEVNULL, timeout=120, env=environment,
+                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        self.assertEqual((done.returncode, done.stderr), (0, b""), done.stderr.decode("utf-8", "replace"))
+        return [pathlib.Path(module) for module in json.loads(done.stdout.decode("utf-8"))]
+
+    def test_no_dll_is_loaded_from_its_own_folder_nor_from_the_current_one(self):
+        self.assertEqual([name for name in ("bcrypt.dll", "profapi.dll", "CRYPTSP.dll", "CRYPTBASE.dll", "mscoree.dll")
+                          if name not in self.copied], [], "Windows' own, there to be copied")
+        for current in (self.here, self.current):
+            with self.subTest(current=current.name):
+                modules = self.loaded(current)
+                beside = [str(module) for module in modules if same(module.parent, self.here) or same(module.parent, current)]
+                self.assertEqual(beside, [str(self.exe)], "the program itself, and no DLL beside it")
+                # Each of Windows' DLLs it loaded is System32's, once. .NET's own and CNG's, for the SHA-256,
+                # are loaded on any Windows: the window's start was exercised, not skipped.
+                taken = {}
+                for module in modules:
+                    taken.setdefault(module.name.lower(), []).append(module)
+                for name in ("mscoree.dll", "bcrypt.dll"):
+                    self.assertIn(name, taken)
+                for name in PLANTED:
+                    for module in taken.get(name.lower(), []):
+                        self.assertTrue(same(module.parent, system32()), module)
+                    self.assertLessEqual(len(taken.get(name.lower(), [])), 1, name)
+
+    def test_the_first_thing_main_does_is_take_dlls_from_system32_alone_or_stop(self):
+        main = method("Main", "string[] arguments")
+        body = main[main.index("{") + 1:].strip()
+        self.assertTrue(body.startswith("if (!Dlls.FromSystem32Only())"), body[:80])
+        self.assertIn("return Started(arguments);", main)
+        self.assertEqual(csharp().count("Application.EnableVisualStyles();"), 1)
+        self.assertLess(csharp().index("Dlls.FromSystem32Only()"), csharp().index("Application.EnableVisualStyles();"))
+        guard = csharp().split("internal static class Dlls")[1].split("\n    }\n")[0]
+        self.assertIn("const uint LOAD_LIBRARY_SEARCH_SYSTEM32 = 0x800;", guard)
+        self.assertIn('[DllImport("kernel32.dll", ExactSpelling = true, SetLastError = true)]', guard)
+        self.assertIn("static extern bool SetDefaultDllDirectories(uint directoryFlags);", guard)
+        self.assertIn('[DllImport("kernel32.dll", EntryPoint = "SetDllDirectoryW", CharSet = CharSet.Unicode, '
+                      'ExactSpelling = true,', guard)
+        self.assertIn('SetDllDirectory("")', guard)
+        self.assertIn("catch (EntryPointNotFoundException)", guard)
+        # Its own calls into DLLs too: .NET Framework looks for a DLL of a DllImport in the program's folder
+        # first, by its full path, unless told otherwise - SetDefaultDllDirectories does not reach that.
+        self.assertIn("\n[assembly: DefaultDllImportSearchPaths(DllImportSearchPath.System32)]\n",
+                      (GUI / "Program.cs").read_text(encoding="ascii").replace("\r\n", "\n"))
+        self.assertEqual(csharp().count("DefaultDllImportSearchPaths"), 1)
+        # Each of its imports names its entry exactly, and none leaves A or W to a CharSet.
+        imports = re.findall(r"\[DllImport\(([^\]]*)\)\]", guard)
+        self.assertEqual(len(imports), 3)
+        for declaration in imports:
+            with self.subTest(declaration):
+                self.assertIn("ExactSpelling = true", declaration)
+                self.assertEqual("CharSet" in declaration, "EntryPoint" in declaration)
 
 
 # ------------------------------------------------------------------------------ Python

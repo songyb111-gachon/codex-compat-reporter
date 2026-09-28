@@ -102,6 +102,12 @@ there, and a `gh.exe` beside the program is never used - and shows what the file
 `web-steps --json`, one JSON object each. The window and the guide say the same words, made by the
 same functions, and every byte of a report and of a send is this file's.
 
+Started from Downloads, where anything else downloaded lies too, it loads no DLL from there. The first
+thing it does is tell Windows to load DLLs from the System32 folder alone, and it runs nothing if
+Windows will not, so a file beside it named as one of Windows' DLLs is not loaded in Windows' place.
+Its tests start it beside copies of Windows' own DLLs and check that it loaded none of them from its
+folder or from the current one.
+
 It is one file of standard-library Python; there is nothing to install. Either clone the repository
 and work in its folder:
 

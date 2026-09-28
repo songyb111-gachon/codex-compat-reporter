@@ -35,24 +35,49 @@
 // script it carries, the copy it would run and the folder it would run it in, the Python it would run it
 // with, and what it would say is missing.
 //
+// And one that reads only this process: Report.exe --loaded-modules starts as the window starts - its
+// copy of the reporter kept and hashed, Python looked for, the window made on this screen's font, laid out
+// and drawn off-screen, never shown, and the reporter never run - and prints, as a JSON array, the path of
+// every module this process has loaded, as Windows lists them. tests/test_window.py holds with it that no
+// DLL is loaded from the program's own folder, nor from the current one.
+//
 // C# 5 only: this is compiled by the in-box csc (tools/make_exe.py).
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.Globalization;
 using System.IO;
 using System.Reflection;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Windows.Forms;
 using System.Windows.Forms.VisualStyles;
+
+// Each DLL this program's own code calls into is taken from System32 alone. Without this, .NET Framework
+// looks for it in the program's folder first, by its full path, whatever SetDefaultDllDirectories says.
+[assembly: DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
 
 namespace CodexCompatReporter
 {
     internal static class Program
     {
+        // First of all, before anything loads a DLL: DLLs from System32 alone, or nothing runs. The rest is
+        // in a method of its own, so compiling this one makes WinForms load nothing.
         [STAThread]
         static int Main(string[] arguments)
+        {
+            if (!Dlls.FromSystem32Only())
+            {
+                return 1;
+            }
+            return Started(arguments);
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        static int Started(string[] arguments)
         {
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
@@ -74,6 +99,60 @@ namespace CodexCompatReporter
         }
     }
 
+    // Where this program takes DLLs from: Windows' System32 folder and nowhere else. Windows looks for a DLL
+    // that is not one of its KnownDLLs in the program's own folder first - Downloads, where it was saved and
+    // is started from, and where anything else downloaded lies too - so a bcrypt.dll or a CRYPTBASE.dll
+    // there, which a SHA-256 and a profile path load, would run in Windows' place. What the loader loads
+    // before Main - the program's own import, mscoree.dll, and .NET's - is the loader's to find, not this
+    // program's: tests/test_window.py measures that none of it comes from that folder either.
+    internal static class Dlls
+    {
+        const uint LOAD_LIBRARY_SEARCH_SYSTEM32 = 0x800;
+        const uint MB_ICONERROR = 0x10;
+        internal const string Unguarded =
+            "This program stops here: Windows did not let it load DLLs from the System32 folder alone, and then " +
+            "a DLL in the folder it is in, such as Downloads, could run in Windows' place. Windows 10 and 11 let it.";
+
+        [DllImport("kernel32.dll", ExactSpelling = true, SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        static extern bool SetDefaultDllDirectories(uint directoryFlags);
+
+        [DllImport("kernel32.dll", EntryPoint = "SetDllDirectoryW", CharSet = CharSet.Unicode, ExactSpelling = true,
+                   SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        static extern bool SetDllDirectory(string pathName);
+
+        [DllImport("user32.dll", EntryPoint = "MessageBoxW", CharSet = CharSet.Unicode, ExactSpelling = true)]
+        static extern int MessageBox(IntPtr owner, string text, string caption, uint type);
+
+        // SetDefaultDllDirectories, for every DLL loaded from here on and every DLL each of them loads; and
+        // SetDllDirectory(""), which takes the current folder out of the older search that a load by a
+        // full path with an altered search path still makes. When Windows has not the one, or refuses
+        // either, the program says so and runs nothing.
+        public static bool FromSystem32Only()
+        {
+            bool guarded;
+            try
+            {
+                guarded = SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32) && SetDllDirectory("");
+            }
+            catch (EntryPointNotFoundException)
+            {
+                guarded = false;
+            }
+            if (!guarded)
+            {
+                byte[] said = new UTF8Encoding(false).GetBytes(Unguarded + "\n");
+                using (Stream errors = Console.OpenStandardError())
+                {
+                    errors.Write(said, 0, said.Length);
+                }
+                MessageBox(IntPtr.Zero, Unguarded, "codex-compat-reporter", MB_ICONERROR);
+            }
+            return guarded;
+        }
+    }
+
     // Where the window is after it was driven: the page it is at, in which of that page's states, and
     // what it asked the reporter on the way, each run's arguments as the window gave them; and whether
     // Windows made it with its access keys shown.
@@ -92,6 +171,47 @@ namespace CodexCompatReporter
         }
     }
 
+    // For --loaded-modules: the reporter as the window finds and keeps it on this machine, whose runs are
+    // never started - the window waits on the first, as it would on Python.
+    internal sealed class Unstarted : ICore
+    {
+        readonly LiveCore live;
+
+        public Unstarted(LiveCore live)
+        {
+            this.live = live;
+        }
+
+        public bool Found
+        {
+            get { return live.Found; }
+        }
+
+        public string Missing
+        {
+            get { return live.Missing; }
+        }
+
+        public string WithoutPython
+        {
+            get { return live.WithoutPython; }
+        }
+
+        public void Run(Control window, string[] arguments, Action<Answer> done)
+        {
+        }
+
+        public bool Exists(string path)
+        {
+            return false;
+        }
+
+        public byte[] Read(string path)
+        {
+            throw new IOException(path + " is not read: nothing was run.");
+        }
+    }
+
     internal static class Hooks
     {
         const string Usage = "usage: Report.exe --fixture <json> (--describe <1-5|confirm> | --render <1-5|confirm> " +
@@ -100,6 +220,8 @@ namespace CodexCompatReporter
                              "--describe takes lists too - 1,2,3 and --scale 1,2 and --size default,min - and then " +
                              "prints a JSON array, one object for each page at each scale and size.\n" +
                              "Report.exe --where: where it would take the reporter and Python from, as JSON.\n" +
+                             "Report.exe --loaded-modules: the window's start, never shown, then every module " +
+                             "loaded, as JSON.\n" +
                              "Without arguments it opens the window.";
 
         public static void Error(string text)
@@ -160,6 +282,11 @@ namespace CodexCompatReporter
             if (arguments.Length == 1 && arguments[0] == "--where")
             {
                 Write(Console.OpenStandardOutput(), Json.Write(new LiveCore().Where()) + "\n");
+                return 0;
+            }
+            if (arguments.Length == 1 && arguments[0] == "--loaded-modules")
+            {
+                Write(Console.OpenStandardOutput(), Json.Write(Loaded()) + "\n");
                 return 0;
             }
             string fixturePath = null;
@@ -304,6 +431,32 @@ namespace CodexCompatReporter
                 Write(Console.OpenStandardOutput(), Json.Write(described.Count == 1 ? described[0] : described) + "\n");
             }
             return 0;
+        }
+
+        // For --loaded-modules: the window's start, up to the first run of the reporter, which is never
+        // started - then the path of every module in this process, as Windows lists them.
+        static List<object> Loaded()
+        {
+            using (ReportForm window = new ReportForm(Ui.ForScreen(), new Unstarted(new LiveCore()), true,
+                                                      Application.ProductVersion, Screen.PrimaryScreen.WorkingArea))
+            {
+                Handles(window);
+                window.Start();
+                Layouts(window);
+                using (Bitmap drawn = new Bitmap(window.Width, window.Height))
+                {
+                    window.DrawToBitmap(drawn, new Rectangle(Point.Empty, window.Size));
+                }
+            }
+            List<object> paths = new List<object>();
+            using (Process self = Process.GetCurrentProcess())
+            {
+                foreach (ProcessModule module in self.Modules)
+                {
+                    paths.Add(module.FileName);
+                }
+            }
+            return paths;
         }
 
         // The window at a page, as the person would find it there with the fixture's answers: made, laid
