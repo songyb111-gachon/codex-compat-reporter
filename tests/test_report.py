@@ -1287,6 +1287,20 @@ class SubmitTests(Sending):
         readme = " ".join((HERE.parent / "README.md").read_text(encoding="utf-8").split())
         self.assertIn("exactly as recorded: " + reporter.PUBLISHED_TIMES + ".", readme)
 
+    def test_the_summary_names_everything_writing_the_file_left_out(self):
+        """Each thing report's left-out line counts, in its words: the file holds no count of them, so
+        submit names them all - another route's records and those whose route is unknown too."""
+        _gh, code, out, _err = self.submit(str(self.file), "--dry-run")
+        self.assertEqual(code, 0)
+        said = [line for line in out.splitlines() if line.startswith("left out    : ")]
+        self.assertEqual(said, ["left out    : %s, when the file was written" % reporter.LEFT_OUT_WHEN_WRITTEN])
+        notes = {"hidden": 1, "elsewhere": 1, "unplaced": {}, "routed": 1, "route_unknown": 1}
+        report = json.loads(self.file.read_bytes())
+        counted = reporter.facts(report, self.file.read_bytes(), notes)["left_out"]["text"].split("; ")
+        self.assertEqual(len(counted), 5)
+        for clause in counted:
+            self.assertIn(clause.split(" ", 1)[1], said[0])
+
 
 def scripted(answers, asked):
     """input(), answered from a list: a string is typed, a callable is run (to change something while

@@ -1256,6 +1256,11 @@ def _write(github, report, raw, login, fork, branch, target, base, has_fork, has
                   "itself to do." % report["reporter"]["tool_version"]), "the pull request")
 
 
+# What writing a report left out of it, each as facts() counts it (left out), for submit to name: the file does not
+# say how many, since a report has no key for them.
+LEFT_OUT_WHEN_WRITTEN = ("records hidden with Clear history, on other engine versions or not placed, sent by an "
+                         "advanced feature's own route or claimed before the spend ledger reaches back")
+
 # The times a report publishes, in the words README.md uses for them.
 PUBLISHED_TIMES = ("when the file was written, when each record was detected, delivered and ended, when "
                    "each capability was last confirmed, and the first and last time the product's checks "
@@ -1323,7 +1328,7 @@ def prepare_submit(path, *, login=None, sha256=None, writes=None, say=print):
     say("report      : %s, %d records (%s), verdict %s"
         % (report["codex_version"], len(report["records"]), time_span(report), report["verdict"]))
     say("times       : published exactly as recorded, UTC to the second - %s" % PUBLISHED_TIMES)
-    say("left out    : records hidden with Clear history, when the file was written")
+    say("left out    : %s, when the file was written" % LEFT_OUT_WHEN_WRITTEN)
     say("destination : %s, pull request from %s:%s" % (REPO, login, branch))
     say("              adding %s" % target)
 
