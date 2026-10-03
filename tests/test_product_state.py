@@ -237,7 +237,7 @@ class ProductStateTests(unittest.TestCase):
     def tearDownClass(cls):
         cls.temporary.cleanup()
 
-    def installation(self, made, *, user_version=None):
+    def installation(self, made, *, user_version=None, ledger_version=None):
         """An installation holding what the product made in `made`, with only what the reporter reads."""
         home = self.root / "installation"
         if home.exists():
@@ -254,11 +254,12 @@ class ProductStateTests(unittest.TestCase):
                         ignore=shutil.ignore_patterns("*backup*", "*-journal", "*-wal", "*-shm"))
         (home / "config" / "compatibility.json").write_text(json.dumps({"engine": {"version": VERSION}}),
                                                             encoding="utf-8")
-        if user_version is not None:
-            database = sqlite3.connect(home / "config" / "state.sqlite")
-            database.execute("PRAGMA user_version = %d" % user_version)
-            database.commit()
-            database.close()
+        for name, version in (("state.sqlite", user_version), ("advanced/advanced.sqlite", ledger_version)):
+            if version is not None:
+                database = sqlite3.connect(home / "config" / name)
+                database.execute("PRAGMA user_version = %d" % version)
+                database.commit()
+                database.close()
         (home / "codex").mkdir()
         return mock.patch.multiple(reporter, PRODUCT=home, CODEX=home / "codex", HOME=self.root)
 
@@ -325,6 +326,19 @@ class ProductStateTests(unittest.TestCase):
                 with self.installation("v4", user_version=version):
                     with self.assertRaisesRegex(reporter.Refused, said):
                         reporter.build(LOGIN)
+
+    def test_a_ledger_schema_it_does_not_know_is_refused_on_the_products_own_ledger(self):
+        with reporter.readonly(self.root / "v4" / "config" / "advanced" / "advanced.sqlite") as ledger:
+            self.assertIn(ledger.execute("PRAGMA user_version").fetchone()[0], reporter.LEDGER_SCHEMAS)
+        for version, said in ((3, r"newer Codex Auto Resume than this reporter knows \(ledger schema 3\)\. "
+                                  r"Update codex-compat-reporter\."),
+                              (0, r"has ledger schema 0, which no Codex Auto Resume this reporter knows writes")):
+            with self.subTest(version):
+                with self.installation("v4", ledger_version=version):
+                    with self.assertRaisesRegex(reporter.Refused, said):
+                        reporter.build(LOGIN)
+                    status = reporter.machine()
+                self.assertEqual(status["records"]["found"], "unreadable")
 
 
 if __name__ == "__main__":

@@ -130,8 +130,9 @@ cd codex-compat-reporter
 - `Report.exe`에는 .NET Framework 4.8. Windows 10과 11에는 모두 들어 있습니다.
 - 설치된 Codex Auto Resume v0.6.0 이상. 감시기가 한 번 이상 돌았어야 합니다. v0.6.0부터
   v0.6.11-alpha까지의 상태 데이터베이스(스키마 3)와 v0.6.11-beta 이후의 것(스키마 4)을 읽습니다.
-  이 도구가 아는 것보다 새 Codex Auto Resume이 쓴 상태는 짐작해서 읽지 않습니다. `status`는 읽을 수
-  없다고 말하고, `report`는 거절하면서 codex-compat-reporter를 업데이트하라고 안내합니다.
+  이 도구가 아는 것보다 새 Codex Auto Resume이 쓴 상태나 고급판 사용 원장은 짐작해서 읽지 않습니다.
+  `status`는 읽을 수 없다고 말하고, `report`는 거절하면서 codex-compat-reporter를 업데이트하라고
+  안내합니다.
 - `submit`에만: [GitHub CLI](https://cli.github.com/)가 `gh auth login --hostname github.com`으로
   로그인되어 있어야 합니다.
 

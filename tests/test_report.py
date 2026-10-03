@@ -633,7 +633,8 @@ class StateDatabaseTests(unittest.TestCase):
         self.assertIn("local checks", out)
 
 
-def spend_ledger(home, spends=(), columns=("spend_id", "at", "capability", "thread_id", "interruption_id")):
+def spend_ledger(home, spends=(), columns=("spend_id", "at", "capability", "thread_id", "interruption_id"),
+                 user_version=2):
     """The advanced edition's config/advanced/advanced.sqlite, with its spend table as v0.6.11 makes it
     (advanced state/schema.py) and these (interruption id, time) units in it."""
     folder = home / "config" / "advanced"
@@ -645,7 +646,7 @@ def spend_ledger(home, spends=(), columns=("spend_id", "at", "capability", "thre
                "interruption_id": key}
         database.execute("INSERT INTO spend VALUES (%s)" % ", ".join("?" * len(columns)),
                          [row[name] for name in columns])
-    database.execute("PRAGMA user_version = 2")
+    database.execute("PRAGMA user_version = %d" % user_version)
     database.commit()
     database.close()
     return folder / "advanced.sqlite"
@@ -665,11 +666,11 @@ class RouteTests(unittest.TestCase):
         return record(**{"interruption_id": ("%x" % number) * 64, "detected_at": NOW - 3000 - number,
                          "last_claim_at": NOW - 1800, **fields})
 
-    def outcome(self, rows, spends=None):
+    def outcome(self, rows, spends=None, ledger_version=2):
         notes = {}
         with Installation([record()] + rows, columns=SCHEMA_4_COLUMNS, user_version=4) as installation:
             if spends is not None:
-                spend_ledger(installation.home, spends)
+                spend_ledger(installation.home, spends, user_version=ledger_version)
             report = reporter.build(LOGIN, notes=notes)
             _code, out, _err = run_main("status")
         return report, notes, out
@@ -706,11 +707,15 @@ class RouteTests(unittest.TestCase):
         self.assertEqual((len(report["records"]), notes["routed"]), (2, 3))
 
     def test_a_unit_the_spend_ledger_paid_at_its_last_claim_leaves_it_out(self):
-        report, notes, _out = self.outcome([self.other(1), self.other(2), self.other(3)], spends=[
-            ("1" * 64, NOW - 1800),                  # the claim it was sent from: the goal continuation's channel
-            ("2" * 64, NOW - 2400),                  # an earlier claim, after which the standard route sent it
-            ("9" * 64, NOW - 1800)])                 # another record's
-        self.assertEqual((len(report["records"]), notes["routed"]), (3, 1))
+        self.assertEqual(reporter.LEDGER_SCHEMAS, (1, 2))
+        for version in reporter.LEDGER_SCHEMAS:             # v0.6.11-alpha's ledger, and v0.6.11-beta.2's on
+            with self.subTest(version):
+                report, notes, _out = self.outcome([self.other(1), self.other(2), self.other(3)], spends=[
+                    ("1" * 64, NOW - 1800),          # the claim it was sent from: the goal continuation's channel
+                    ("2" * 64, NOW - 2400),          # an earlier claim, after which the standard route sent it
+                    ("9" * 64, NOW - 1800)],         # another record's
+                    ledger_version=version)
+                self.assertEqual((len(report["records"]), notes["routed"]), (3, 1))
 
     def test_no_ledger_or_an_empty_one_leaves_every_record_in(self):
         for spends in (None, []):
@@ -719,16 +724,21 @@ class RouteTests(unittest.TestCase):
                 self.assertEqual((len(report["records"]), notes["routed"]), (2, 0))
 
     def test_a_ledger_it_cannot_read_is_refused_not_passed_over(self):
-        for name, columns, said in (
-                ("not a database", None, "could not be read"),
-                ("no interruption ids", ("spend_id", "at", "capability", "thread_id"),
-                 "does not hold the spend ledger.*Update codex-compat-reporter")):
+        every = ("spend_id", "at", "capability", "thread_id", "interruption_id")
+        for name, columns, version, said in (
+                ("not a database", None, 2, "could not be read"),
+                ("no interruption ids", ("spend_id", "at", "capability", "thread_id"), 2,
+                 "does not hold the spend ledger.*Update codex-compat-reporter"),
+                # A newer ledger, even with the same columns, could keep its units otherwise.
+                ("a newer ledger", every, 3, r"newer Codex Auto Resume than this reporter knows \(ledger schema 3\)\. "
+                                             r"Update codex-compat-reporter\."),
+                ("no ledger schema", every, 0, "has ledger schema 0, which no Codex Auto Resume this reporter knows")):
             with self.subTest(name):
                 with Installation([record()]) as installation:
                     if columns is None:
                         spend_ledger(installation.home).write_bytes(b"this is not a database" * 100)
                     else:
-                        spend_ledger(installation.home, columns=columns)
+                        spend_ledger(installation.home, columns=columns, user_version=version)
                     with self.assertRaisesRegex(reporter.Refused, said):
                         reporter.build(LOGIN)
                     code, out, _err = run_main("status")

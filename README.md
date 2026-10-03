@@ -136,8 +136,9 @@ It needs:
 - For `Report.exe`: .NET Framework 4.8, which is part of every Windows 10 and 11.
 - Codex Auto Resume v0.6.0 or newer, installed, with its watcher having run at least once. It reads
   the state database of v0.6.0 to v0.6.11-alpha (schema 3) and of v0.6.11-beta and later (schema 4).
-  A state written by a newer Codex Auto Resume than it knows is never guessed at: `status` says it
-  cannot be read, and `report` refuses and asks you to update codex-compat-reporter.
+  A state, or an advanced-edition spend ledger, written by a newer Codex Auto Resume than it knows
+  is never guessed at: `status` says it cannot be read, and `report` refuses and asks you to update
+  codex-compat-reporter.
 - For `submit` only: the [GitHub CLI](https://cli.github.com/), signed in with
   `gh auth login --hostname github.com`.
 

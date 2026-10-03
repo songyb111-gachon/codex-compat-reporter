@@ -232,6 +232,11 @@ COLUMNS = ("thread_id", "category", "state", "last_error", "detected_at", "resum
 CONTINUATION_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "urn:codex-auto-resume:continuation-client-id")
 PLUG_WORDS = frozenset({"plugged", "held"})       # gate words only the edition's plug writes, at any gate but consent
 SPEND = ("interruption_id", "at")                 # the spend ledger's columns read, and nothing else
+# The spend ledger's user_versions this reporter reads, and no others: 1, written by v0.6.11-alpha and -beta, and
+# 2, from v0.6.11-beta.2 (advanced state/schema.py SCHEMA_VERSION, the same through v0.6.12-alpha.2). Version 2
+# added arming.warnings and left the spend table as it was. A newer ledger is refused, as a newer state is:
+# it could keep its units otherwise, and what it leaves out would change with no word said.
+LEDGER_SCHEMAS = (1, 2)
 
 
 def known(value, vocabulary):
@@ -505,14 +510,22 @@ def paid_claims() -> dict:
     """{interruption id: the claim times an advanced-edition feature paid a unit at}, from that edition's
     spend ledger, or {} where there is none - every standard installation, and every one before v0.6.11.
 
-    Only the two columns SPEND names. A ledger without them is refused, not passed over: without it
-    a record another route sent could not be told from one the standard route sent (ANOTHER ROUTE)."""
+    Only the two columns SPEND names, and only from the ledger schemas this reporter knows (LEDGER_SCHEMAS).
+    A ledger of another schema, or without those columns, is refused, not passed over: without it a record
+    another route sent could not be told from one the standard route sent (ANOTHER ROUTE)."""
     path = PRODUCT / "config" / "advanced" / "advanced.sqlite"
     if not path.is_file():
         return {}
     paid = {}
     try:
         with readonly(path) as db:
+            found = db.execute("PRAGMA user_version").fetchone()[0]
+            if found > max(LEDGER_SCHEMAS):
+                raise Refused("%s was written by a newer Codex Auto Resume than this reporter knows (ledger "
+                              "schema %d). Update codex-compat-reporter." % (path, found))
+            if found not in LEDGER_SCHEMAS:
+                raise Refused("%s has ledger schema %d, which no Codex Auto Resume this reporter knows writes, so "
+                              "it cannot tell which records an advanced feature sent." % (path, found))
             present = {row[1] for row in db.execute("PRAGMA table_info(spend)")}
             if not set(SPEND) <= present:
                 raise Refused("%s does not hold the spend ledger this reporter reads, so it cannot tell which "
