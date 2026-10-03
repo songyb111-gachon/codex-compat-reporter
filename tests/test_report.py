@@ -795,10 +795,19 @@ class RouteTests(unittest.TestCase):
                 self.assertIn("records here   : cannot be read - ", out)
 
     def test_the_ledger_is_read_and_not_written(self):
-        with Installation([record()]) as installation:
-            spend_ledger(installation.home, [("a" * 64, NOW - 9999)])
+        """What it leaves out depends on the ledger - a record whose last claim it paid, and one claimed before
+        it reaches back - and reading it, by report and by status, changes no file."""
+        paid = record(interruption_id="b" * 64, detected_at=NOW - 3000, last_claim_at=NOW - 1800)
+        early = record(interruption_id="c" * 64, detected_at=NOW - 2900, last_claim_at=NOW - 100 * DAY)
+        with Installation([record(), paid, early]) as installation:
+            spend_ledger(installation.home, [("b" * 64, NOW - 1800)], pruned=[("d" * 64, NOW - 200 * DAY)])
             before = installation.snapshot()
-            self.assertEqual(len(reporter.build(LOGIN)["records"]), 1)
+            notes = {}
+            self.assertEqual(len(reporter.build(LOGIN, notes=notes)["records"]), 1)
+            self.assertEqual((notes["routed"], notes["route_unknown"]), (1, 1))
+            code, out, _err = run_main("status")
+            self.assertEqual(code, 0)
+            self.assertIn("records here   : 1 in all: ", out)
             self.assertEqual(installation.snapshot(), before, "no file appeared or changed")
 
     @unittest.skipUnless(PRODUCT_READER.is_file(), "the product's checkout is not beside this one")
