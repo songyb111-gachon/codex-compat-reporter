@@ -1,0 +1,331 @@
+"""The state database as Codex Auto Resume's own code writes it, read by the reporter.
+
+The other tests build the product's state by hand, in the columns the reporter reads. These have the
+product make it, from its own tags: schema 3 by v0.6.10's store, schema 4 by v0.6.11's - fresh, and
+migrated from v0.6.10's - with every record registered and claimed by that store and then carried to
+where it ends in the store's own columns, as the engine's watch would carry it; and, at v0.6.11, the
+advanced edition's own claim ledger paying for the sends its goal continuation carries. The reporter
+then reads each of them as it reads an installation, and what it counts is what the product's own
+receiving side counts (build/community_report.py).
+
+Skipped where the product's repository, with its tags, is not beside this checkout - the public CI
+among them. `git archive` takes each tag's src/codex_auto_resume (and advanced/src) into a temporary
+folder, and a child `python -I` runs it from there under homes of its own, with no window. Nothing
+here reads this machine's homes, writes anywhere but temporary folders, or reaches a network.
+
+    python -m unittest discover -s tests
+"""
+from __future__ import annotations
+
+import importlib.util
+import io
+import json
+import os
+import pathlib
+import shutil
+import sqlite3
+import subprocess
+import sys
+import tarfile
+import tempfile
+import time
+import unittest
+import uuid
+from unittest import mock
+
+HERE = pathlib.Path(__file__).resolve().parent
+if str(HERE.parent) not in sys.path:
+    sys.path.insert(0, str(HERE.parent))
+
+_SANDBOX = pathlib.Path(tempfile.gettempdir()) / "codex-compat-reporter-tests-nowhere"
+os.environ.setdefault("CODEX_AUTO_RESUME_HOME", str(_SANDBOX / "product"))
+os.environ.setdefault("CODEX_HOME", str(_SANDBOX / "codex"))
+
+import codex_compat_report as reporter  # noqa: E402
+
+# The product's repository, when this checkout sits beside it (the maintainer's machine, or CAR_CHECKOUT).
+PRODUCT = pathlib.Path(os.environ.get("CAR_CHECKOUT") or HERE.parent.parent / "codex-auto-resume")
+GIT = shutil.which("git")
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+SCHEMA_3, SCHEMA_4 = "v0.6.10", "v0.6.11"        # the last release of each schema's first line
+VERSION = "codex-cli 0.158.0"
+LOGIN = "someone"
+
+# What the child runs, with the product's tree first on its path: <tree> <home> <base time> <mode>.
+CHILD = r'''
+import hashlib, json, pathlib, sqlite3, sys
+
+tree, home, base, mode = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]), float(sys.argv[3]), sys.argv[4]
+sys.path[:0] = [str(tree / "src")] + ([str(tree / "advanced" / "src")] if (tree / "advanced" / "src").is_dir() else [])
+
+from codex_auto_resume import config, machine
+from codex_auto_resume.store import SCHEMA_VERSION, Store
+
+paths = config.Paths(home)
+paths.ensure()
+if mode == "migrate":
+    with Store(paths.state_dir, migrate=True) as store:
+        print(json.dumps({"schema": store.schema_version(), "count": len(store.all_records())}))
+    raise SystemExit(0)
+
+
+def key(name):
+    return hashlib.sha256(name.encode("ascii")).hexdigest()
+
+
+def uuid_of(number, kind):
+    return "0a1b2c3d-%04x-7000-8000-%012x" % (kind, number)
+
+
+def gates(**words):
+    vector = {name: machine.gate(machine.PASS) for name in machine.GATES}
+    vector.update(words)
+    return machine.encode_gates(vector)
+
+
+store = Store(paths.state_dir)
+store.set_enabled(True, base)
+written = {}
+
+
+def make(name, number, *, state, reason, delivered=True, ledger=None, carried=(), client=None, gate_eval=None,
+         hidden=False, turn_status="completed", claims=1):
+    """One record, registered and claimed by the store, then carried to where it ends in its own columns."""
+    interruption = key(name)
+    at = base + number * 3600
+    record = {"thread_id": uuid_of(number, 1), "turn_id": uuid_of(number, 2), "completed_at": at - 60,
+              "started_at": at - 600, "ordinal": 3, "interruption_id": interruption, "reset_at": at - 30,
+              "limit_type": "codex:primary", "uncertain": False, "category": "usage_limit"}
+    assert store.register(record, at, state="waiting_poll", next_retry_at=at)
+    claimed_at = None
+    for claim in range(claims):
+        claimed_at = at + 60.5 + claim * 900
+        options = {"ledger": ledger, "carried": frozenset(carried)} if ledger is not None and claim == 0 else {}
+        claimed, gate, why = store.reserve_detailed(interruption, claimed_at, **options)
+        assert claimed, (name, gate, why)
+        if claim + 1 < claims:              # a route that left it waiting: its claim given back, its time kept
+            assert store.release_claim(interruption, "waiting_retry", "released_before_send", claimed_at + 1,
+                                       next_retry_at=claimed_at + 2)
+    changes = {"state": state, "last_error": reason, "gate_eval": gate_eval or gates(), "recovery_client_id": client}
+    if delivered:
+        changes.update(queue_id=uuid_of(number, 3), first_queued_at=claimed_at + 5, resumed_at=claimed_at + 30,
+                       turn_started_at=claimed_at + 30, recovery_turn_id=uuid_of(number, 4),
+                       recovery_turn_status=turn_status, outcome_at=claimed_at + 600)
+    if hidden:
+        changes["history_hidden_at"] = claimed_at + 700
+    with store._transaction() as connection:
+        connection.execute("UPDATE interruptions SET %s WHERE interruption_id=?"
+                           % ", ".join("%s=?" % column for column in changes), (*changes.values(), interruption))
+    written[name] = {"interruption_id": interruption, "last_claim_at": claimed_at, "client_id": client}
+
+
+make("worked", 1, state="recovered", reason="progress_observed")
+make("failed", 2, state="recovery_turn_failed", reason="turn_failed", turn_status="failed")
+make("hidden", 3, state="recovered", reason="progress_observed", hidden=True)
+if mode == "v4":
+    assert SCHEMA_VERSION == 4
+    from codex_auto_resume.domain import ids
+    from codex_auto_resume.domain.plug import Plug, Point
+    from codex_auto_resume_advanced.ledger import ClaimLedger
+    from codex_auto_resume_advanced.state import AdvancedState
+
+    advanced = AdvancedState(paths)
+    with advanced._transaction() as connection:        # the file made by its own schema; armed by hand
+        connection.execute("INSERT INTO arming (capability, state, since, actor, reason, statement_revision, "
+                           "engine_version, warnings) VALUES (?,?,?,?,?,?,?,?)",
+                           ("goal_continuation", "armed", base, "dashboard", None, 1, None, None))
+
+    class Paying(Plug):
+        """The edition's claim ledger as core asks it (P11), told that the goal continuation's answer is
+        carried - what the edition's runtime tells it when that feature named the channel or the route."""
+        __slots__ = ("ledger",)
+
+        def __init__(self, ledger):
+            self.ledger = ledger
+
+        def claim_ledger(self, connection, record, now, carried):
+            return self.ledger.claim(connection, record, now, {"goal_continuation"} if carried else set())
+
+    paying = Paying(ClaimLedger(advanced))
+    make("marker free", 4, state="recovered", reason="progress_observed",
+         client=ids.continuation_client_id(key("marker free")))
+    make("goal route", 5, state="submission_unknown", reason="queue_result_unknown_do_not_resend", delivered=False,
+         gate_eval=gates(thread_available=machine.gate(machine.PASS, machine.PLUGGED)))
+    make("goal held", 6, state="superseded", reason="later_turn_exists", delivered=False,
+         gate_eval=gates(thread_available=machine.gate(machine.WAIT, machine.HELD)))
+    make("goal channel", 7, state="recovered", reason="progress_observed", ledger=paying, carried={Point.SENDER})
+    make("paid then standard", 8, state="recovered", reason="progress_observed", ledger=paying,
+         carried={Point.UNLOADED}, claims=2)
+    advanced.close()
+    ledger = sqlite3.connect(advanced.path)
+    written["spend"] = [list(row) for row in ledger.execute("SELECT interruption_id, at FROM spend ORDER BY spend_id")]
+    ledger.close()
+store.close()
+with Store(paths.state_dir, check=True) as checked:     # every row is one the product's own validator takes
+    written["schema"] = checked.schema_version()
+    written["count"] = len(checked.all_records())
+print(json.dumps(written))
+'''
+
+
+def run(argv, **options):
+    return subprocess.run(argv, capture_output=True, stdin=subprocess.DEVNULL, timeout=300,
+                          creationflags=NO_WINDOW, **options)
+
+
+def tagged() -> bool:
+    if GIT is None or not (PRODUCT / ".git").exists():
+        return False
+    try:
+        return all(run([GIT, "-C", str(PRODUCT), "rev-parse", "--verify", "-q", "refs/tags/%s^{commit}" % tag])
+                   .returncode == 0 for tag in (SCHEMA_3, SCHEMA_4))
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def extract(tag, paths, into: pathlib.Path) -> pathlib.Path:
+    """The tag's own files under `paths`, as `git archive` gives them, in a folder of their own."""
+    done = run([GIT, "-C", str(PRODUCT), "archive", "--format=tar", tag, *paths])
+    if done.returncode:
+        raise AssertionError("git archive %s: %s" % (tag, done.stderr.decode("utf-8", "replace")))
+    into.mkdir(parents=True)
+    with tarfile.open(fileobj=io.BytesIO(done.stdout)) as archive:
+        archive.extractall(into, **({"filter": "data"} if hasattr(tarfile, "data_filter") else {}))
+    return into
+
+
+def load_product_reader():
+    spec = importlib.util.spec_from_file_location("community_report_for_product_state",
+                                                  PRODUCT / "build" / "community_report.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@unittest.skipUnless(tagged(), "the product's repository, with its tags, is not beside this checkout")
+class ProductStateTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.temporary = tempfile.TemporaryDirectory()
+        root = pathlib.Path(cls.temporary.name)
+        cls.root = root
+        cls.base = time.time() - 3 * 86400 + 0.25
+        trees = {SCHEMA_3: extract(SCHEMA_3, ["src/codex_auto_resume"], root / "v3-tree"),
+                 SCHEMA_4: extract(SCHEMA_4, ["src/codex_auto_resume", "advanced/src"], root / "v4-tree")}
+        cls.made = {}
+        for name, tag, mode in (("v4", SCHEMA_4, "v4"), ("v3", SCHEMA_3, "v3")):
+            cls.made[name] = cls.child(trees[tag], root / name, mode)
+        shutil.copytree(root / "v3", root / "migrated")
+        cls.made["migrated"] = cls.child(trees[SCHEMA_4], root / "migrated", "migrate")
+
+    @classmethod
+    def child(cls, tree, home, mode):
+        """What the product's own code made in `home`, as the child said it."""
+        home.mkdir(parents=True, exist_ok=True)
+        script = cls.root / "child.py"
+        script.write_text(CHILD, encoding="utf-8")
+        scratch = {"CODEX_AUTO_RESUME_HOME": str(home), "CODEX_HOME": str(home / "codex-home"),
+                   "LOCALAPPDATA": str(home / "local"), "APPDATA": str(home / "roaming")}
+        done = run([sys.executable, "-I", str(script), str(tree), str(home), repr(cls.base), mode],
+                   cwd=str(cls.root), env=dict(os.environ, **scratch))
+        if done.returncode:
+            raise AssertionError("the product's own code failed (%s):\n%s"
+                                 % (mode, done.stderr.decode("utf-8", "replace")[-3000:]))
+        return json.loads(done.stdout.decode("utf-8"))
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.temporary.cleanup()
+
+    def installation(self, made, *, user_version=None):
+        """An installation holding what the product made in `made`, with only what the reporter reads."""
+        home = self.root / "installation"
+        if home.exists():
+            shutil.rmtree(home)
+        (home / "app" / ".codex-plugin").mkdir(parents=True)
+        (home / "app" / ".codex-plugin" / "plugin.json").write_text(
+            json.dumps({"name": "codex-auto-resume", "version": "0.6.11"}), encoding="utf-8")
+        (home / "logs").mkdir()
+        stamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(self.base - 3600))
+        (home / "logs" / "auto-resume.log").write_text(
+            "[%s] engine %s %s. Delivery is still proven per interruption before anything is marked resumed.\n"
+            % (stamp, VERSION, reporter.ENGINE_LOG_WORDS["verified"]), encoding="utf-8")
+        shutil.copytree(self.root / made / "config", home / "config",
+                        ignore=shutil.ignore_patterns("*backup*", "*-journal", "*-wal", "*-shm"))
+        (home / "config" / "compatibility.json").write_text(json.dumps({"engine": {"version": VERSION}}),
+                                                            encoding="utf-8")
+        if user_version is not None:
+            database = sqlite3.connect(home / "config" / "state.sqlite")
+            database.execute("PRAGMA user_version = %d" % user_version)
+            database.commit()
+            database.close()
+        (home / "codex").mkdir()
+        return mock.patch.multiple(reporter, PRODUCT=home, CODEX=home / "codex", HOME=self.root)
+
+    def report(self, made, **options):
+        notes = {}
+        with self.installation(made, **options):
+            report = reporter.build(LOGIN, notes=notes)
+            status = reporter.machine()
+        return report, notes, status
+
+    def test_the_product_made_each_state_with_its_own_store(self):
+        self.assertEqual((self.made["v3"]["schema"], self.made["v3"]["count"]), (3, 3))
+        self.assertEqual((self.made["v4"]["schema"], self.made["v4"]["count"]), (4, 8))
+        self.assertEqual(self.made["migrated"], {"schema": 4, "count": 3})
+
+    def test_schema_4_is_read_with_the_counts_the_receiving_side_makes_of_it(self):
+        report, notes, status = self.report("v4")
+        self.assertEqual([entry["state"] for entry in report["records"]],
+                         ["recovered", "recovery_turn_failed", "recovered"])
+        self.assertEqual([bool(entry["delivered_at"]) for entry in report["records"]], [True] * 3)
+        self.assertEqual((notes["hidden"], notes["routed"], notes["elsewhere"], notes["unplaced"]), (1, 4, 0, {}))
+        exact = report["capabilities"]["exact_thread_recovery"]
+        self.assertEqual((exact["confirmed"], exact["missed"], exact["level"]), (3, 0, "VERIFIED"))
+        self.assertEqual(report["reporter"]["product_version"], "0.6.11")
+        self.assertEqual((status["records"]["total"], status["records"]["other_route"], status["hidden"]), (3, 4, 1))
+        self.assertIn("other route    : 4 sent by an advanced feature's own route, which a report leaves out",
+                      status["lines"])
+        raw = reporter.encode(report)
+        self.assertEqual(reporter.validate(raw)[1], [])
+        reader = load_product_reader()
+        parsed, problems, _recomputed = reader.inspect(raw, author=LOGIN, releases=None)
+        self.assertEqual(problems, [])
+        self.assertEqual(reader.graded(parsed), {"worked": True, "failed": True, "neither": False, "both": True})
+
+    def test_the_marks_it_reads_are_the_ones_the_product_wrote(self):
+        marker_free = self.made["v4"]["marker free"]
+        namespace = uuid.uuid5(uuid.NAMESPACE_URL, "urn:codex-auto-resume:continuation-client-id")
+        self.assertEqual(marker_free["client_id"], str(uuid.uuid5(namespace, marker_free["interruption_id"])))
+        self.assertEqual(reporter.CONTINUATION_NAMESPACE, namespace)
+        # The ledger paid each claim that carried the feature's answer at that claim's own time: the one the
+        # goal continuation's channel was sent from is its record's last claim, and the route that left a
+        # record waiting is not the claim the standard route later sent it from.
+        spent = {key: at for key, at in self.made["v4"]["spend"]}
+        channel, then = self.made["v4"]["goal channel"], self.made["v4"]["paid then standard"]
+        self.assertEqual(spent[channel["interruption_id"]], channel["last_claim_at"])
+        self.assertLess(spent[then["interruption_id"]], then["last_claim_at"])
+        self.assertEqual(len(spent), 2)
+
+    def test_schema_3_reads_as_it_did_and_as_v0_6_11_migrates_it(self):
+        reports = {}
+        for made in ("v3", "migrated"):
+            with self.subTest(made):
+                report, notes, _status = self.report(made)
+                self.assertEqual([entry["state"] for entry in report["records"]], ["recovered", "recovery_turn_failed"])
+                self.assertEqual((notes["hidden"], notes["routed"]), (1, 0))
+                reports[made] = dict(report, recorded_at=None)
+        self.assertEqual(reports["v3"], reports["migrated"])
+
+    def test_a_schema_it_does_not_know_is_refused_on_the_products_own_file(self):
+        for version, said in ((5, r"newer Codex Auto Resume than this reporter knows \(schema 5\)\. "
+                                  r"Update codex-compat-reporter\."),
+                              (2, r"has schema 2; this reporter needs Codex Auto Resume v0\.6\.0 or newer")):
+            with self.subTest(version):
+                with self.installation("v4", user_version=version):
+                    with self.assertRaisesRegex(reporter.Refused, said):
+                        reporter.build(LOGIN)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -38,6 +38,7 @@ import sys
 import tempfile
 import time
 import unittest
+import uuid
 from unittest import mock
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -68,7 +69,11 @@ SHA = "0123456789abcdef0123456789abcdef01234567"
 
 COLUMNS = ("interruption_id", "thread_id", "turn_id", "category", "state", "last_error",
            "detected_at", "resumed_at", "outcome_at", "submitted_at", "recovery_turn_id",
-           "recovery_turn_status", "gate_eval", "reset_at", "limit_type", "history_hidden_at")
+           "recovery_turn_status", "gate_eval", "reset_at", "limit_type", "history_hidden_at",
+           "recovery_client_id", "last_claim_at")
+# What schema 4 added to interruptions (the product's store/columns.py _SCHEMA_4_COLUMNS, v0.6.11).
+SCHEMA_4_COLUMNS = COLUMNS + ("not_before", "hold", "task_print", "context_tokens", "objection_at",
+                              "objection_until")
 GATES = json.dumps({"engine_compatible": ["PASS", "ok"], "identity": ["PASS", "ok"],
                     "thread_available": ["PASS", "ok"], "usage": ["PASS", "ok"]})
 # The sixteen capabilities the product's watcher judges (compat/model.py CAPABILITIES).
@@ -533,20 +538,41 @@ class StateDatabaseTests(unittest.TestCase):
     """What the state database may be, and what the reporter says when it is something else."""
 
     def test_a_newer_schema_is_refused_rather_than_read_as_todays(self):
-        with Installation([record()], user_version=4):
-            with self.assertRaisesRegex(reporter.Refused, "newer Codex Auto Resume.*Update"):
-                reporter.build(LOGIN)
+        for version in (5, 40):
+            with self.subTest(version):
+                with Installation([record()], user_version=version, columns=SCHEMA_4_COLUMNS):
+                    with self.assertRaisesRegex(reporter.Refused, r"newer Codex Auto Resume than this reporter "
+                                                                  r"knows \(schema %d\)\. Update codex-compat-reporter\."
+                                                                  % version):
+                        reporter.build(LOGIN)
 
     def test_an_older_or_unknown_schema_is_refused_with_the_version_it_needs(self):
-        for version in (0, 2):
+        for version in (0, 1, 2):
             with self.subTest(version):
                 with Installation([record()], user_version=version):
-                    with self.assertRaisesRegex(reporter.Refused, "v0.6.0 or newer"):
+                    with self.assertRaisesRegex(reporter.Refused, r"v0\.6\.0 or newer \(schema 3 or 4\)"):
                         reporter.build(LOGIN)
+
+    def test_schema_3_and_schema_4_are_read_alike(self):
+        """v0.6.0 to v0.6.11-alpha write schema 3, and v0.6.11-beta and later schema 4, which only adds."""
+        rows = [record(), record(interruption_id="b" * 64, state="recovery_turn_failed", last_error="turn_failed",
+                                 recovery_turn_status="failed", detected_at=NOW - 3500)]
+        reports = {}
+        for version, columns in ((3, COLUMNS), (4, SCHEMA_4_COLUMNS)):
+            with self.subTest(version):
+                with Installation(rows, user_version=version, columns=columns):
+                    report = reporter.build(LOGIN)
+                    _code, out, _err = run_main("status")
+                self.assertEqual([entry["state"] for entry in report["records"]],
+                                 ["recovered", "recovery_turn_failed"])
+                self.assertIn("records here   : 2 in all: 2 on this engine version", out)
+                reports[version] = dict(report, recorded_at=None)
+        self.assertEqual(reports[3], reports[4])
 
     def test_a_missing_column_or_table_is_refused(self):
         without = tuple(name for name in COLUMNS if name != "outcome_at")
-        for columns in (without, ()):
+        unmarked = tuple(name for name in COLUMNS if name != "recovery_client_id")
+        for columns in (without, unmarked, ()):
             with self.subTest(len(columns)):
                 with Installation([record()], columns=columns):
                     with self.assertRaisesRegex(reporter.Refused, "missing: "):
@@ -590,6 +616,123 @@ class StateDatabaseTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("cannot be read", out)
         self.assertIn("local checks", out)
+
+
+def spend_ledger(home, spends=(), columns=("spend_id", "at", "capability", "thread_id", "interruption_id")):
+    """The advanced edition's config/advanced/advanced.sqlite, with its spend table as v0.6.11 makes it
+    (advanced state/schema.py) and these (interruption id, time) units in it."""
+    folder = home / "config" / "advanced"
+    folder.mkdir(parents=True, exist_ok=True)
+    database = sqlite3.connect(folder / "advanced.sqlite")
+    database.execute("CREATE TABLE spend (%s)" % ", ".join(columns))
+    for key, at in spends:
+        row = {"spend_id": None, "at": at, "capability": "goal_continuation", "thread_id": THREAD,
+               "interruption_id": key}
+        database.execute("INSERT INTO spend VALUES (%s)" % ", ".join("?" * len(columns)),
+                         [row[name] for name in columns])
+    database.execute("PRAGMA user_version = 2")
+    database.commit()
+    database.close()
+    return folder / "advanced.sqlite"
+
+
+def derived(key):
+    """The client id the product queues a marker-free continuation of `key` under (domain/ids.py)."""
+    namespace = uuid.uuid5(uuid.NAMESPACE_URL, "urn:codex-auto-resume:continuation-client-id")
+    return str(uuid.uuid5(namespace, key))
+
+
+class RouteTests(unittest.TestCase):
+    """A record an advanced-edition feature carried by a route of its own is left out, counted and said -
+    and every other record is reported as before (the module's ANOTHER ROUTE)."""
+
+    def other(self, number, **fields):
+        return record(**{"interruption_id": ("%x" % number) * 64, "detected_at": NOW - 3000 - number,
+                         "last_claim_at": NOW - 1800, **fields})
+
+    def outcome(self, rows, spends=None):
+        notes = {}
+        with Installation([record()] + rows, columns=SCHEMA_4_COLUMNS, user_version=4) as installation:
+            if spends is not None:
+                spend_ledger(installation.home, spends)
+            report = reporter.build(LOGIN, notes=notes)
+            _code, out, _err = run_main("status")
+        return report, notes, out
+
+    def test_a_marker_free_continuation_is_left_out_and_said(self):
+        report, notes, out = self.outcome([self.other(1, recovery_client_id=derived("1" * 64))])
+        self.assertEqual((len(report["records"]), notes["routed"]), (1, 1))
+        self.assertIn("records here   : 1 in all: 1 on this engine version", out)
+        self.assertIn("other route    : 1 sent by an advanced feature's own route, which a report leaves out\n", out)
+        facts = reporter.facts(report, reporter.encode(report), notes)
+        self.assertEqual(facts["left_out"]["other_route"], 1)
+        self.assertTrue(facts["left_out"]["text"].endswith("; 1 sent by an advanced feature's own route"))
+
+    def test_a_client_id_codex_gave_is_the_standard_routes(self):
+        report, notes, out = self.outcome([self.other(1, recovery_client_id=derived("2" * 64)),
+                                           self.other(3, recovery_client_id="0a1b2c3d-0003-7000-8000-000000000003")])
+        self.assertEqual((len(report["records"]), notes["routed"]), (3, 0))
+        self.assertNotIn("other route", out)
+        self.assertEqual(reporter.facts(report, reporter.encode(report), notes)["left_out"]["text"],
+                         "0 hidden with Clear history; 0 on other engine versions; 0 not placed")
+
+    def test_a_gate_word_only_the_editions_plug_writes_leaves_it_out_but_at_consent(self):
+        def gates(name, result, word):
+            vector = json.loads(GATES)
+            vector[name] = [result, word]
+            return json.dumps(vector)
+        rows = [self.other(1, gate_eval=gates("thread_available", "PASS", "plugged"), state="submission_unknown",
+                           resumed_at=None, outcome_at=None, last_error="queue_result_unknown_do_not_resend"),
+                self.other(2, gate_eval=gates("thread_available", "WAIT", "held"), state="superseded",
+                           resumed_at=None, outcome_at=None, last_error="later_turn_exists"),
+                self.other(3, gate_eval=gates("usage", "WAIT", "held")),
+                self.other(4, gate_eval=gates("consent", "WAIT", "held"))]
+        report, notes, _out = self.outcome(rows)
+        self.assertEqual((len(report["records"]), notes["routed"]), (2, 3))
+
+    def test_a_unit_the_spend_ledger_paid_at_its_last_claim_leaves_it_out(self):
+        report, notes, _out = self.outcome([self.other(1), self.other(2), self.other(3)], spends=[
+            ("1" * 64, NOW - 1800),                  # the claim it was sent from: the goal continuation's channel
+            ("2" * 64, NOW - 2400),                  # an earlier claim, after which the standard route sent it
+            ("9" * 64, NOW - 1800)])                 # another record's
+        self.assertEqual((len(report["records"]), notes["routed"]), (3, 1))
+
+    def test_no_ledger_or_an_empty_one_leaves_every_record_in(self):
+        for spends in (None, []):
+            with self.subTest(spends):
+                report, notes, _out = self.outcome([self.other(1)], spends=spends)
+                self.assertEqual((len(report["records"]), notes["routed"]), (2, 0))
+
+    def test_a_ledger_it_cannot_read_is_refused_not_passed_over(self):
+        for name, columns, said in (
+                ("not a database", None, "could not be read"),
+                ("no interruption ids", ("spend_id", "at", "capability", "thread_id"),
+                 "does not hold the spend ledger.*Update codex-compat-reporter")):
+            with self.subTest(name):
+                with Installation([record()]) as installation:
+                    if columns is None:
+                        spend_ledger(installation.home).write_bytes(b"this is not a database" * 100)
+                    else:
+                        spend_ledger(installation.home, columns=columns)
+                    with self.assertRaisesRegex(reporter.Refused, said):
+                        reporter.build(LOGIN)
+                    code, out, _err = run_main("status")
+                self.assertEqual(code, 0)
+                self.assertIn("records here   : cannot be read - ", out)
+
+    def test_the_ledger_is_read_and_not_written(self):
+        with Installation([record()]) as installation:
+            spend_ledger(installation.home, [("a" * 64, NOW - 9999)])
+            before = installation.snapshot()
+            self.assertEqual(len(reporter.build(LOGIN)["records"]), 1)
+            self.assertEqual(installation.snapshot(), before, "no file appeared or changed")
+
+    @unittest.skipUnless(PRODUCT_READER.is_file(), "the product's checkout is not beside this one")
+    def test_every_word_it_carries_is_one_the_receiving_side_knows(self):
+        reader = load_product_reader()
+        for mine, theirs in ((reporter.CATEGORIES, reader.CATEGORIES), (reporter.STATES, reader.STATES),
+                             (reporter.REASONS, reader.REASONS), (reporter.TURN_STATUSES, reader.TURN_STATUSES)):
+            self.assertLessEqual(mine, theirs)
 
 
 class ValidateTests(unittest.TestCase):
@@ -1358,13 +1501,13 @@ REFUSAL_KEYS = {"ok", "refused", "exit"}
 GH_KEYS = {"path", "signed_in", "login"}
 SURVEY_KEYS = {"ok", "tool_version", "installation", "product_version", "engine_version", "engine_from_log",
                "records", "hidden", "local_checks", "report_file", "blocked", "lines", "gh", "default_login"}
-RECORDS_KEYS = {"found", "total", "on_this_version", "other_versions", "not_placed", "not_placed_why", "problem",
-                "text"}
+RECORDS_KEYS = {"found", "total", "on_this_version", "other_versions", "not_placed", "not_placed_why", "other_route",
+                "problem", "text"}
 REPORT_KEYS = {"ok", "path", "codex_version", "verdict", "login", "records", "span", "bytes", "sha256",
                "left_out", "lines", "kept", "said"}
 REPORT_FILE_KEYS = {"path", "name", "exists", "already"}
 LOGIN_KEYS = {"ok", "login", "said", "gh"}
-LEFT_OUT_KEYS = {"hidden", "other_versions", "not_placed", "not_placed_why", "text"}
+LEFT_OUT_KEYS = {"hidden", "other_versions", "not_placed", "not_placed_why", "other_route", "text"}
 SUBMIT_KEYS = {"ok", "file", "bytes", "sha256", "codex_version", "verdict", "records", "login", "repository",
                "target", "branch", "fork", "fork_exists", "branch_exists", "gh", "writes", "url", "written",
                "after", "checked", "sending", "lines"}
@@ -1434,7 +1577,7 @@ class JsonSurveyTests(Guided):
         why = "no engine line before it in the logs kept"
         self.assertEqual(found["records"], {
             "found": "yes", "total": 3, "on_this_version": 1, "other_versions": 1, "not_placed": 1,
-            "not_placed_why": {why: 1}, "problem": None,
+            "not_placed_why": {why: 1}, "other_route": 0, "problem": None,
             "text": "records here   : 3 in all: 1 on this engine version, 1 on other versions, 1 (1: %s) not placed"
                     % why})
         self.assertEqual(found["hidden"], 1)
@@ -1513,7 +1656,8 @@ class JsonReportTests(unittest.TestCase):
         self.assertEqual(found["span"], reporter.time_span(json.loads(written)))
         self.assertEqual(set(found["left_out"]), LEFT_OUT_KEYS)
         self.assertEqual((found["left_out"]["hidden"], found["left_out"]["other_versions"],
-                          found["left_out"]["not_placed"], found["left_out"]["not_placed_why"]), (1, 0, 0, {}))
+                          found["left_out"]["not_placed"], found["left_out"]["not_placed_why"],
+                          found["left_out"]["other_route"]), (1, 0, 0, {}, 0))
         code, out, _err = run_main("report", "--login", LOGIN, "--out", str(self.work / "in-words.json"))
         self.assertEqual(code, 0)
         self.assertEqual((self.work / "in-words.json").read_bytes(), written, "one clock, one report")

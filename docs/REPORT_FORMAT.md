@@ -20,7 +20,7 @@ rather than a surprise.
 | `reporter` | `github_login`, `tool`, `tool_version`, `product_version`, `windows` (the OS build number, e.g. `10.0.26200`) |
 | `attribution` | the rule by which a record was counted for this version; `window` and `basis` are for a window set by hand and are `null` here |
 | `local_checks` | how many times the product's own checks passed on this version here, when first and last, and which capabilities they cover |
-| `records` | one entry per interruption this machine handled on this version, except those hidden with Clear history, which are left out |
+| `records` | one entry per interruption this machine handled on this version, except those hidden with Clear history and those an advanced-edition feature sent by a route of its own, which are left out |
 | `capabilities` | per capability: `confirmed`, `missed`, `last_confirmed`, `level` - for the ten capabilities below, and no others |
 | `note` | the file saying what it is |
 

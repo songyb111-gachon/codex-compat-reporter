@@ -134,7 +134,10 @@ It needs:
   path, and never the one in the current folder or beside them, however `PATH` spells that folder.
   They start Python isolated (`-I`), so no module is taken from either folder.
 - For `Report.exe`: .NET Framework 4.8, which is part of every Windows 10 and 11.
-- Codex Auto Resume v0.6.0 or newer, installed, with its watcher having run at least once.
+- Codex Auto Resume v0.6.0 or newer, installed, with its watcher having run at least once. It reads
+  the state database of v0.6.0 to v0.6.11-alpha (schema 3) and of v0.6.11-beta and later (schema 4).
+  A state written by a newer Codex Auto Resume than it knows is never guessed at: `status` says it
+  cannot be read, and `report` refuses and asks you to update codex-compat-reporter.
 - For `submit` only: the [GitHub CLI](https://cli.github.com/), signed in with
   `gh auth login --hostname github.com`.
 
@@ -165,7 +168,7 @@ machine.
 | Command and option | What it does |
 | --- | --- |
 | `guide` | What `Report.cmd` runs: `status`, `report` and `submit`, one question at a time. It offers the login `gh` is signed in as, never writes over a file already there without a yes, opens the report in Notepad and the project's page in your browser only on a yes, and sends only when you type `send` - then exactly as `submit --yes` would, with the file's SHA-256 pinned as it was when you were asked. Without `gh` signed in as your login, it keeps the file and says how to send it on the web. Every question's default sends nothing. |
-| `status` | Prints the installed product version, the Codex version it sees, how many records exist here (on this Codex version, on others, and not placed on any, with the reason), how many are hidden with Clear history, and whether the product's own checks passed on this version. Writes nothing. |
+| `status` | Prints the installed product version, the Codex version it sees, how many records exist here (on this Codex version, on others, and not placed on any, with the reason), how many are hidden with Clear history, how many an advanced-edition feature sent by a route of its own (when any did), and whether the product's own checks passed on this version. Writes nothing. |
 | `report --login LOGIN` | Writes the report for the Codex version installed now, filed under your GitHub login. Required. |
 | `report --codex-version VERSION` | Reports on another Codex version this machine has records for, as `0.155.0` or `codex-cli 0.155.0`. `--version` is the same option. |
 | `report --out FILE` | Writes the report to FILE instead of `codex-cli-<version>.json` in the current folder. The name you choose stays on your machine; see `submit`. |
@@ -196,13 +199,25 @@ Codex home is `%USERPROFILE%\.codex` unless `CODEX_HOME` does.
 | It reads | For |
 | --- | --- |
 | `.codex-auto-resume\app\.codex-plugin\plugin.json` | the installed product version |
-| `.codex-auto-resume\config\state.sqlite` | the recovery records: when each was detected, delivered and how it ended, its category, state and reason, which gates it passed, and the thread and turn ids that key the count below. Records hidden with Clear history are left out. |
+| `.codex-auto-resume\config\state.sqlite` | the recovery records: when each was detected, delivered and how it ended, its category, state and reason, which gates it passed, the thread and turn ids that key the count below, and the interruption id, client id and claim time that tell a record another route sent (below). Records hidden with Clear history are left out. |
+| `.codex-auto-resume\config\advanced\advanced.sqlite` | only where the advanced edition keeps it: its spend ledger's interruption ids and times, which name the sends an advanced feature paid for |
 | `.codex-auto-resume\logs\auto-resume.log` and `auto-resume.log.1` to `.5` | which Codex version was running around each record, and whether the product's own checks passed on it |
 | `.codex-auto-resume\config\compatibility.json` | what the watcher itself concluded about the Codex installed now |
 | `.codex\thread_history_*.sqlite` (the newest) | how many items of each kind the recovered turn produced |
 
-Thread and turn ids, and the paths of these files, are read and used on your machine only; they are
-never written into the report and never sent. One query passes over your conversation itself: to
+A report is about the standard route: a continuation sent with `codex queue`, carrying a marker the
+product finds in Codex's history to prove it arrived. The advanced edition has features that, once
+you turn them on, continue a conversation by a route of their own - queued through Codex's app server
+with no marker, or by setting the conversation's goal active again - and their records stay in the
+same database. Counted, they would make the standard route look better or worse on that Codex version
+than it was, and a report has no field to label them with. So each such record is left out, counted
+and said, as a hidden one is, by the marks the product itself writes: the client id it gives a
+marker-free continuation, a gate word only the edition's features write, and a unit the edition's
+spend ledger paid at the claim the record was sent from. Nothing is guessed: a record no mark names
+is the standard route's, which is every record on a standard installation.
+
+Thread, turn and interruption ids, and the paths of these files, are read and used on your machine
+only; they are never written into the report and never sent. One query passes over your conversation itself: to
 count what the recovered turn produced, SQLite reads that turn's items in Codex's history and hands
 back only a number per kind - never their text. The product itself does the same, and its
 [privacy notes](https://github.com/songyb111-gachon/codex-auto-resume-windows/blob/main/docs/PRIVACY.md)

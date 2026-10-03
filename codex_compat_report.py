@@ -23,10 +23,13 @@ already there as the guide's third step does; `web-steps` is how the guide says 
 the web. The words and the JSON come from the same functions, so the two cannot say different things.
 
 What it reads, on this machine only and read-only: the product's own installation - its plugin
-manifest, its log and the five rotated copies of it, its state database and the compatibility
-report its watcher writes - and, for progress counts alone, Codex's own history database. Thread
-and turn ids, and the paths of those files, are read to find and join the records; they are used
-here and never written into the report. Records hidden with Clear history are left out.
+manifest, its log and the five rotated copies of it, its state database (schema 3, v0.6.0 to
+v0.6.11-alpha, or schema 4, v0.6.11-beta and later), the compatibility report its watcher writes and,
+where the advanced edition keeps one, its spend ledger - and, for progress counts alone, Codex's own
+history database. Thread, turn and interruption ids, and the paths of those files, are read to find
+and join the records; they are used here and never written into the report. Records hidden with
+Clear history are left out, and so are records an advanced-edition feature carried by a route of
+its own (ANOTHER ROUTE, below).
 
 What it writes: one JSON file of counts, states, times and version strings, which `report` writes
 and never writes over unless told to. `submit` sends exactly the bytes of that file, after you have
@@ -68,6 +71,7 @@ import sys
 import tempfile
 import time
 import traceback
+import uuid
 
 __version__ = "1.4.1"
 
@@ -81,7 +85,15 @@ PRODUCT = pathlib.Path(os.environ.get("CODEX_AUTO_RESUME_HOME") or (HOME / ".cod
 CODEX = pathlib.Path(os.environ.get("CODEX_HOME") or (HOME / ".codex"))
 
 EXIT_OK, EXIT_REFUSED, EXIT_NOT_OPEN = 0, 2, 3
-SCHEMA = 3                   # the state database's user_version; Codex Auto Resume v0.6.0 and later
+# The state database's user_versions this reporter reads, and no others: 3, written by Codex Auto Resume
+# v0.6.0 to v0.6.11-alpha, and 4, from v0.6.11-beta (its store/schema.py SCHEMA_VERSION). Schema 4 added
+# columns and a table - interruptions.not_before, hold, task_print, context_tokens, objection_at and
+# objection_until, threads.tier, settings.observe_only, six watcher_status columns and the notices table
+# (store/columns.py _SCHEMA_4_COLUMNS) - and changed none: every column COLUMNS reads is written as it was,
+# and every word it is compared with is the same word (store/migrations.py _migrate_3_to_4 adds them empty,
+# with no backfill; domain/vocabulary.py's RecordState, FailureCategory and TurnStatus are v0.6.10's).
+# A newer schema is refused rather than read as today's, and so is an older one.
+SCHEMAS = (3, 4)
 MINIMUM_PRODUCT = "v0.6.0"
 MAX_BYTES, MAX_RECORDS = 1_000_000, 500       # the receiving side's limits, compat_admin.py
 
@@ -162,11 +174,12 @@ STATES = frozenset({
 TURN_STATUSES = frozenset({"completed", "failed", "inProgress", "interrupted", "other"})
 REASONS = frozenset({
     "ambiguous_receipt", "awaiting_delivery_receipt", "budget_restored", "cancel",
-    "category_disabled", "chain_cap", "correlation_conflict", "daily_submission_cap",
+    "category_disabled", "chain_cap", "chain_time_cap", "correlation_conflict", "daily_submission_cap",
     "desktop_app_unavailable", "duplicate_marker", "duplicate_owner", "expired",
     "later_turn_exists", "latest_turn_changed", "loaded_recheck_failed", "loaded_state_unknown",
     "marker_not_turn_initiator", "multiple_matching_queue_items", "no_progress_budget",
     "no_progress_observed", "no_receipt_do_not_resend", "notLoaded", "not_loaded",
+    "observe_only", "observe_only_unknown", "offline",          # v0.6.11's, with chain_time_cap
     "other_recovery_in_flight", "outcome_deadline", "owned_queue_removed", "parent_cancelled",
     "parent_handed_over", "paused", "paused_unknown", "post_send_bookkeeping_failed",
     "progress_observed", "progress_then_turn_failed", "projection_stale",
@@ -179,11 +192,46 @@ REASONS = frozenset({
     "usage_unavailable", "usage_unknown", "user_cancelled", "user_input_queued", "user_joined",
     "user_queued_input", "waiting_reset", "withdraw_unconfirmed"})
 
-# The columns read from the state database, and nothing else. thread_id and recovery_turn_id
-# only key the progress count below; history_hidden_at only leaves hidden records out.
+# The columns read from the state database, and nothing else, all of them in schema 3 and 4 alike.
+# thread_id and recovery_turn_id only key the progress count below; history_hidden_at only leaves
+# hidden records out; interruption_id, recovery_client_id and last_claim_at only tell a record
+# another route carried (ANOTHER ROUTE).
 COLUMNS = ("thread_id", "category", "state", "last_error", "detected_at", "resumed_at", "outcome_at",
            "submitted_at", "recovery_turn_id", "recovery_turn_status", "gate_eval", "reset_at",
-           "limit_type", "history_hidden_at")
+           "limit_type", "history_hidden_at", "interruption_id", "recovery_client_id", "last_claim_at")
+
+# ANOTHER ROUTE. A report is about one route: the standard edition's, which sends every continuation with
+# `codex queue --thread/--message`, ends its words with the record's marker and proves delivery by finding
+# that marker in Codex's history - what exact_thread_recovery and the capabilities after it measure. From
+# v0.6.11-beta.2 the product's advanced edition has features that, once a person turns them on, carry a
+# standard record by a route of their own, and the record stays in the same table, in the same states
+# (advanced/src/codex_auto_resume_advanced at v0.6.11; the same three features through v0.6.12-alpha.2):
+#
+# - the marker-free continuation queues it through Codex's app server (thread/queue/add) with no marker,
+#   under a client id the product derives from the interruption (domain/ids.py continuation_client_id) and
+#   writes into recovery_client_id before the claim; delivery is proven by that id, and no id Codex gives a
+#   message is ever that one (engine/delivery.py, proof and _delivery);
+# - the goal continuation, for a conversation the app does not hold, sets its paused goal active through the
+#   app server (thread/goal/set) instead of sending, and core stores the thread_available gate it would have
+#   waited at as passed with the word `plugged`; it holds the standard continuation back at that gate while
+#   the goal runs, stored as `held` - a word core writes itself only at consent (domain/gates.py, HELD and
+#   PLUGGED: "no standard record is ever stored with it"); and where measurement M2b has passed (no release
+#   records that yet) it is the channel that queues the continuation through the app server, with its
+#   marker, which only the edition's spend ledger shows: one unit for each feature whose answer a claim
+#   carried, written inside that claim at that claim's own time - the record's last_claim_at, when it is
+#   the claim the send came from (advanced ledger.py and state/spend.py; kept 90 days at most);
+# - start-with-Codex starts the watcher, and sends and claims nothing.
+#
+# A delivery by any of these says something about Codex's app server, not about `codex queue`, and a goal
+# Codex carried on says nothing of either: counted, it would inflate the standard route's numbers for that
+# Codex version - a worked recovery, exact_thread_recovery confirmed - and a hold or an unproven route would
+# count against it. Labelling it is not possible: a record has nine keys, and the receiving side refuses a
+# report with any other. So such a record is left out of the report and of `status`'s placing, counted, and
+# said - as a hidden one is. The marks are the product's own and nothing is guessed: a record no mark names
+# was carried by the standard route, which is every record on a standard installation.
+CONTINUATION_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "urn:codex-auto-resume:continuation-client-id")
+PLUG_WORDS = frozenset({"plugged", "held"})       # gate words only the edition's plug writes, at any gate but consent
+SPEND = ("interruption_id", "at")                 # the spend ledger's columns read, and nothing else
 
 
 def known(value, vocabulary):
@@ -424,7 +472,7 @@ def state_rows():
     """(rows, hidden) from the product's state database, or None when there is none yet.
 
     Only the named columns, only records not hidden with Clear history, and only from the
-    schema this reporter knows: a newer or unknown one is refused rather than read as today's.
+    schemas this reporter knows (SCHEMAS): a newer or unknown one is refused rather than read as today's.
     """
     path = PRODUCT / "config" / "state.sqlite"
     if not path.is_file():
@@ -432,12 +480,12 @@ def state_rows():
     try:
         with readonly(path) as db:
             found = db.execute("PRAGMA user_version").fetchone()[0]
-            if found > SCHEMA:
+            if found > max(SCHEMAS):
                 raise Refused("%s was written by a newer Codex Auto Resume than this reporter knows "
                               "(schema %d). Update codex-compat-reporter." % (path, found))
-            if found != SCHEMA:
+            if found not in SCHEMAS:
                 raise Refused("%s has schema %d; this reporter needs Codex Auto Resume %s or newer "
-                              "(schema %d)." % (path, found, MINIMUM_PRODUCT, SCHEMA))
+                              "(schema %s)." % (path, found, MINIMUM_PRODUCT, " or ".join(map(str, SCHEMAS))))
             present = {row[1] for row in db.execute("PRAGMA table_info(interruptions)")}
             missing = [name for name in COLUMNS if name not in present]
             if missing:
@@ -451,6 +499,53 @@ def state_rows():
     except sqlite3.Error as error:
         raise Refused("%s could not be read: %s" % (path, error))
     return [row for row in rows if _moment(row["detected_at"])], hidden
+
+
+def paid_claims() -> dict:
+    """{interruption id: the claim times an advanced-edition feature paid a unit at}, from that edition's
+    spend ledger, or {} where there is none - every standard installation, and every one before v0.6.11.
+
+    Only the two columns SPEND names. A ledger without them is refused, not passed over: without it
+    a record another route sent could not be told from one the standard route sent (ANOTHER ROUTE)."""
+    path = PRODUCT / "config" / "advanced" / "advanced.sqlite"
+    if not path.is_file():
+        return {}
+    paid = {}
+    try:
+        with readonly(path) as db:
+            present = {row[1] for row in db.execute("PRAGMA table_info(spend)")}
+            if not set(SPEND) <= present:
+                raise Refused("%s does not hold the spend ledger this reporter reads, so it cannot tell which "
+                              "records an advanced feature sent. Update codex-compat-reporter." % path)
+            for key, at in db.execute("SELECT %s FROM spend WHERE interruption_id IS NOT NULL" % ", ".join(SPEND)):
+                if isinstance(key, str) and _moment(at):
+                    paid.setdefault(key, set()).add(_moment(at))
+    except sqlite3.Error as error:
+        raise Refused("%s could not be read: %s" % (path, error))
+    return paid
+
+
+def another_route(row, paid) -> bool:
+    """Whether an advanced-edition feature carried this record by a route of its own, by the product's
+    own marks (ANOTHER ROUTE): the marker-free continuation's client id, a gate word only the edition's
+    plug writes, or a unit its spend ledger paid at the claim the record was last sent from."""
+    key = row["interruption_id"]
+    if isinstance(key, str) and row["recovery_client_id"] == str(uuid.uuid5(CONTINUATION_NAMESPACE, key)):
+        return True
+    if any(name != "consent" and isinstance(gate, list) and len(gate) == 2 and gate[1] in PLUG_WORDS
+           for name, gate in _gates(row).items()):
+        return True
+    claim = _moment(row["last_claim_at"])
+    return claim is not None and claim in paid.get(key, ())
+
+
+def by_route(rows):
+    """(the records the standard route carried, how many another route did), which a report leaves out."""
+    if not rows:
+        return rows, 0
+    paid = paid_claims()
+    kept = [row for row in rows if not another_route(row, paid)]
+    return kept, len(rows) - len(kept)
 
 
 def no_state() -> Refused:
@@ -504,6 +599,7 @@ def build(login: str, version: str | None = None, notes: dict | None = None) -> 
     if found is None:
         raise no_state()
     every, hidden = found
+    every, routed = by_route(every)
     timeline = engine_timeline(lines)
 
     rows, elsewhere, unplaced = [], 0, collections.Counter()
@@ -517,7 +613,7 @@ def build(login: str, version: str | None = None, notes: dict | None = None) -> 
             unplaced[why] += 1
     rows.sort(key=lambda row: _moment(row["detected_at"]))
     if notes is not None:
-        notes.update(hidden=hidden, elsewhere=elsewhere, unplaced=dict(unplaced))
+        notes.update(hidden=hidden, elsewhere=elsewhere, unplaced=dict(unplaced), routed=routed)
     if len(rows) > MAX_RECORDS:
         raise Refused("This machine has %d records on %s, and a report holds at most %d. Nothing was "
                       "written." % (len(rows), version, MAX_RECORDS))
@@ -793,11 +889,15 @@ def machine() -> dict:
             "engine version : %s" % (current or "not reported yet")
             + ("" if current is None or engine else " (from the log; the watcher has not written its report)")]
     # found: "yes", "none" (no state database yet) or "unreadable" (problem says why).
+    # other_route: how many another route carried (ANOTHER ROUTE), left out of total as hidden ones are.
     records = {"found": "yes", "total": None, "on_this_version": None, "other_versions": None,
-               "not_placed": None, "not_placed_why": {}, "problem": None}
-    hidden = None
+               "not_placed": None, "not_placed_why": {}, "other_route": None, "problem": None}
+    hidden = routed = None
     try:
         found = state_rows()
+        if found is not None:
+            rows, routed = by_route(found[0])
+            found = rows, found[1]
     except Refused as refused:
         found = None
         records.update(found="unreadable", problem=str(refused), text="records here   : cannot be read - %s" % refused)
@@ -809,6 +909,7 @@ def machine() -> dict:
             blocked = blocked or str(no_state())
     if found is not None:
         rows, hidden = found
+        records["other_route"] = routed
         timeline = engine_timeline(lines)
         on, elsewhere, unplaced = 0, 0, collections.Counter()
         for row in rows:
@@ -826,6 +927,9 @@ def machine() -> dict:
     said.append(records["text"])
     if hidden is not None:
         said.append("hidden         : %d hidden with Clear history, which a report leaves out" % hidden)
+    if routed:
+        said.append("other route    : %d sent by an advanced feature's own route, which a report leaves out"
+                    % routed)
     seen = sum(1 for _when, text in lines if current and passes_checks(text, current))
     checks = "local checks   : %s" % ("passed on this version (%d log line%s)" % (seen, "s"[:seen != 1])
                                       if seen else "not seen in the logs kept")
@@ -898,10 +1002,12 @@ def facts(report: dict, raw: bytes, notes: dict | None = None) -> dict:
     left_out = None
     if notes is not None:
         unplaced = dict(sorted((notes.get("unplaced") or {}).items()))
+        routed = notes.get("routed") or 0
         left_out = {"hidden": notes["hidden"], "other_versions": notes["elsewhere"],
-                    "not_placed": sum(unplaced.values()), "not_placed_why": unplaced,
+                    "not_placed": sum(unplaced.values()), "not_placed_why": unplaced, "other_route": routed,
                     "text": "%d hidden with Clear history; %d on other engine versions; %s not placed"
-                            % (notes["hidden"], notes["elsewhere"], _unplaced_text(notes))}
+                            % (notes["hidden"], notes["elsewhere"], _unplaced_text(notes))
+                            + ("; %d sent by an advanced feature's own route" % routed if routed else "")}
         said.append("left out   : %s" % left_out["text"])
     said.append("SHA-256    : %s" % digest)
     return {"codex_version": report["codex_version"], "verdict": report["verdict"],
