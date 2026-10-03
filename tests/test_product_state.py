@@ -4,7 +4,8 @@ The other tests build the product's state by hand, in the columns the reporter r
 product make it, from its own tags: schema 3 by v0.6.10's store, schema 4 by v0.6.11's - fresh, and
 migrated from v0.6.10's - with every record registered and claimed by that store and then carried to
 where it ends in the store's own columns, as the engine's watch would carry it; and, at v0.6.11, the
-advanced edition's own claim ledger paying for the sends its goal continuation carries. The reporter
+advanced edition's own claim ledger paying for the sends its goal continuation carries, and pruning
+those units 90 days on, as its watcher would. The reporter
 then reads each of them as it reads an installation, and what it counts is what the product's own
 receiving side counts (build/community_report.py).
 
@@ -17,6 +18,7 @@ here reads this machine's homes, writes anywhere but temporary folders, or reach
 """
 from __future__ import annotations
 
+import contextlib
 import importlib.util
 import io
 import json
@@ -51,7 +53,8 @@ SCHEMA_3, SCHEMA_4 = "v0.6.10", "v0.6.11"        # the last release of each sche
 VERSION = "codex-cli 0.158.0"
 LOGIN = "someone"
 
-# What the child runs, with the product's tree first on its path: <tree> <home> <base time> <mode>.
+# What the child runs, with the product's tree first on its path: <tree> <home> <base time> <mode>. In mode
+# "prune", base is the time the product's own pruning pass runs at, on the ledger already in <home>.
 CHILD = r'''
 import hashlib, json, pathlib, sqlite3, sys
 
@@ -66,6 +69,20 @@ paths.ensure()
 if mode == "migrate":
     with Store(paths.state_dir, migrate=True) as store:
         print(json.dumps({"schema": store.schema_version(), "count": len(store.all_records())}))
+    raise SystemExit(0)
+if mode == "prune":
+    from codex_auto_resume_advanced.state import AdvancedState
+    from codex_auto_resume_advanced.state.journal import JournalMixin
+
+    advanced = AdvancedState(paths)
+    path = advanced.path
+    advanced.close()
+    ledger = sqlite3.connect(path)
+    JournalMixin._prune_spend(ledger, "main", base)        # the pass its journal and every 256th unit run
+    ledger.commit()
+    print(json.dumps({"units": ledger.execute("SELECT count(*) FROM spend").fetchone()[0],
+                      "given": ledger.execute("SELECT seq FROM sqlite_sequence WHERE name='spend'").fetchone()[0]}))
+    ledger.close()
     raise SystemExit(0)
 
 
@@ -217,16 +234,21 @@ class ProductStateTests(unittest.TestCase):
             cls.made[name] = cls.child(trees[tag], root / name, mode)
         shutil.copytree(root / "v3", root / "migrated")
         cls.made["migrated"] = cls.child(trees[SCHEMA_4], root / "migrated", "migrate")
+        # The v0.6.11 state as its watcher leaves it 92 days on, when its ledger has pruned every unit.
+        cls.pruned_at = cls.base + 92 * 86400
+        shutil.copytree(root / "v4", root / "pruned")
+        cls.made["pruned"] = cls.child(trees[SCHEMA_4], root / "pruned", "prune", base=cls.pruned_at)
 
     @classmethod
-    def child(cls, tree, home, mode):
+    def child(cls, tree, home, mode, base=None):
         """What the product's own code made in `home`, as the child said it."""
         home.mkdir(parents=True, exist_ok=True)
         script = cls.root / "child.py"
         script.write_text(CHILD, encoding="utf-8")
         scratch = {"CODEX_AUTO_RESUME_HOME": str(home), "CODEX_HOME": str(home / "codex-home"),
                    "LOCALAPPDATA": str(home / "local"), "APPDATA": str(home / "roaming")}
-        done = run([sys.executable, "-I", str(script), str(tree), str(home), repr(cls.base), mode],
+        done = run([sys.executable, "-I", str(script), str(tree), str(home), repr(cls.base if base is None else base),
+                    mode],
                    cwd=str(cls.root), env=dict(os.environ, **scratch))
         if done.returncode:
             raise AssertionError("the product's own code failed (%s):\n%s"
@@ -263,9 +285,11 @@ class ProductStateTests(unittest.TestCase):
         (home / "codex").mkdir()
         return mock.patch.multiple(reporter, PRODUCT=home, CODEX=home / "codex", HOME=self.root)
 
-    def report(self, made, **options):
+    def report(self, made, at=None, **options):
+        """What the reporter makes of it, run now or, given `at`, with this machine's clock at that time."""
         notes = {}
-        with self.installation(made, **options):
+        clock = contextlib.nullcontext() if at is None else mock.patch.object(reporter.time, "time", return_value=at)
+        with self.installation(made, **options), clock:
             report = reporter.build(LOGIN, notes=notes)
             status = reporter.machine()
         return report, notes, status
@@ -280,7 +304,8 @@ class ProductStateTests(unittest.TestCase):
         self.assertEqual([entry["state"] for entry in report["records"]],
                          ["recovered", "recovery_turn_failed", "recovered"])
         self.assertEqual([bool(entry["delivered_at"]) for entry in report["records"]], [True] * 3)
-        self.assertEqual((notes["hidden"], notes["routed"], notes["elsewhere"], notes["unplaced"]), (1, 4, 0, {}))
+        self.assertEqual((notes["hidden"], notes["routed"], notes["elsewhere"], notes["unplaced"], notes["route_unknown"]),
+                         (1, 4, 0, {}, 0))
         exact = report["capabilities"]["exact_thread_recovery"]
         self.assertEqual((exact["confirmed"], exact["missed"], exact["level"]), (3, 0, "VERIFIED"))
         self.assertEqual(report["reporter"]["product_version"], "0.6.11")
@@ -308,13 +333,30 @@ class ProductStateTests(unittest.TestCase):
         self.assertLess(spent[then["interruption_id"]], then["last_claim_at"])
         self.assertEqual(len(spent), 2)
 
+    def test_a_record_claimed_before_the_products_own_pruning_reaches_is_left_out(self):
+        """92 days on, v0.6.11's own pruning has taken both units (LEDGER REACH): the goal continuation's
+        channel, now marked by nothing, and every other record claimed then are left out, not counted as the
+        standard route's. The same ledger before the pruning, read at the same time, lost nothing and tells
+        every claim, as it did."""
+        self.assertEqual(self.made["pruned"], {"units": 0, "given": 2})
+        report, notes, status = self.report("pruned", at=self.pruned_at)
+        self.assertEqual((len(report["records"]), notes["hidden"], notes["routed"], notes["route_unknown"]),
+                         (0, 1, 3, 4))
+        self.assertEqual((status["records"]["total"], status["records"]["other_route"],
+                          status["records"]["route_unknown"]), (0, 3, 4))
+        self.assertIn("route unknown  : 4 claimed before the advanced edition's spend ledger reaches back, which "
+                      "a report leaves out", status["lines"])
+        self.assertEqual(report["capabilities"]["exact_thread_recovery"]["confirmed"], 0)
+        report, notes, _status = self.report("v4", at=self.pruned_at)
+        self.assertEqual((len(report["records"]), notes["routed"], notes["route_unknown"]), (3, 4, 0))
+
     def test_schema_3_reads_as_it_did_and_as_v0_6_11_migrates_it(self):
         reports = {}
         for made in ("v3", "migrated"):
             with self.subTest(made):
                 report, notes, _status = self.report(made)
                 self.assertEqual([entry["state"] for entry in report["records"]], ["recovered", "recovery_turn_failed"])
-                self.assertEqual((notes["hidden"], notes["routed"]), (1, 0))
+                self.assertEqual((notes["hidden"], notes["routed"], notes["route_unknown"]), (1, 0, 0))
                 reports[made] = dict(report, recorded_at=None)
         self.assertEqual(reports["v3"], reports["migrated"])
 

@@ -29,7 +29,7 @@ where the advanced edition keeps one, its spend ledger - and, for progress count
 history database. Thread, turn and interruption ids, and the paths of those files, are read to find
 and join the records; they are used here and never written into the report. Records hidden with
 Clear history are left out, and so are records an advanced-edition feature carried by a route of
-its own (ANOTHER ROUTE, below).
+its own (ANOTHER ROUTE, below) and those claimed before its spend ledger reaches back (LEDGER REACH).
 
 What it writes: one JSON file of counts, states, times and version strings, which `report` writes
 and never writes over unless told to. `submit` sends exactly the bytes of that file, after you have
@@ -227,8 +227,9 @@ COLUMNS = ("thread_id", "category", "state", "last_error", "detected_at", "resum
 # Codex version - a worked recovery, exact_thread_recovery confirmed - and a hold or an unproven route would
 # count against it. Labelling it is not possible: a record has nine keys, and the receiving side refuses a
 # report with any other. So such a record is left out of the report and of `status`'s placing, counted, and
-# said - as a hidden one is. The marks are the product's own and nothing is guessed: a record no mark names
-# was carried by the standard route, which is every record on a standard installation.
+# said - as a hidden one is. The marks are the product's own and nothing is guessed: a record no mark names,
+# claimed where the ledger can still tell (LEDGER REACH, below), was carried by the standard route, which is
+# every record on a standard installation.
 CONTINUATION_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "urn:codex-auto-resume:continuation-client-id")
 PLUG_WORDS = frozenset({"plugged", "held"})       # gate words only the edition's plug writes, at any gate but consent
 SPEND = ("interruption_id", "at")                 # the spend ledger's columns read, and nothing else
@@ -237,6 +238,21 @@ SPEND = ("interruption_id", "at")                 # the spend ledger's columns r
 # added arming.warnings and left the spend table as it was. A newer ledger is refused, as a newer state is:
 # it could keep its units otherwise, and what it leaves out would change with no word said.
 LEDGER_SCHEMAS = (1, 2)
+
+# LEDGER REACH. The ledger is the one lasting mark of the goal continuation's channel, and of its route once
+# core has written that record's next gates over `plugged`, and it does not keep its units for ever: both of
+# its schemas prune a unit 90 days old, and the oldest beyond 5,000, never one from the last day (advanced
+# state/journal.py _prune_spend, the same from v0.6.11-alpha through v0.6.12-alpha.2). Its ids are
+# AUTOINCREMENT, and a unit is never deleted otherwise, not even when its claim is given back. Past that, a
+# record the channel sent would read as the standard route's. So where the ledger has lost a unit - SQLite has
+# given its table more ids than it holds - a claim is told only from where the ledger can still vouch for it:
+# from its oldest unit, since every unit pruned is older than every unit kept; and, while it holds fewer than
+# 5,000, from 90 days before now (this machine's clock, which the pruning read too) as well, since age prunes
+# nothing younger, and had count pruned a younger one, the 5,000 it kept would all be younger still, and there
+# yet. A record last claimed before that is left out, counted and said, as another route's is: whichever route
+# it went by, its mark may be gone. A record never claimed was never sent, and a ledger that has lost nothing
+# tells every claim, as every standard installation, which has none, does.
+LEDGER_DAYS, LEDGER_UNITS = 90, 5000
 
 
 def known(value, vocabulary):
@@ -506,16 +522,19 @@ def state_rows():
     return [row for row in rows if _moment(row["detected_at"])], hidden
 
 
-def paid_claims() -> dict:
-    """{interruption id: the claim times an advanced-edition feature paid a unit at}, from that edition's
-    spend ledger, or {} where there is none - every standard installation, and every one before v0.6.11.
+def paid_claims():
+    """(paid, reach) from the advanced edition's spend ledger: paid is {interruption id: the claim times a
+    feature paid a unit at}, and reach the earliest claim time it can still tell, or None when it can tell
+    every one (LEDGER REACH). ({}, None) where there is no ledger - every standard installation, and every
+    one before v0.6.11.
 
-    Only the two columns SPEND names, and only from the ledger schemas this reporter knows (LEDGER_SCHEMAS).
-    A ledger of another schema, or without those columns, is refused, not passed over: without it a record
-    another route sent could not be told from one the standard route sent (ANOTHER ROUTE)."""
+    Only the two columns SPEND names, how many units the table holds and has ever been given (SQLite's own
+    sqlite_sequence), and only from the ledger schemas this reporter knows (LEDGER_SCHEMAS). A ledger of
+    another schema, or without those columns, is refused, not passed over: without it a record another
+    route sent could not be told from one the standard route sent (ANOTHER ROUTE)."""
     path = PRODUCT / "config" / "advanced" / "advanced.sqlite"
     if not path.is_file():
-        return {}
+        return {}, None
     paid = {}
     try:
         with readonly(path) as db:
@@ -533,9 +552,27 @@ def paid_claims() -> dict:
             for key, at in db.execute("SELECT %s FROM spend WHERE interruption_id IS NOT NULL" % ", ".join(SPEND)):
                 if isinstance(key, str) and _moment(at):
                     paid.setdefault(key, set()).add(_moment(at))
+            units, oldest = db.execute("SELECT count(*), min(at) FROM spend").fetchone()
+            given = None                # how many units the table was ever given; None when SQLite keeps no count
+            if db.execute("SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'sqlite_sequence'"
+                          ).fetchone()[0]:
+                given = db.execute("SELECT max(seq) FROM sqlite_sequence WHERE name = 'spend'").fetchone()[0] or 0
     except sqlite3.Error as error:
         raise Refused("%s could not be read: %s" % (path, error))
-    return paid
+    return paid, ledger_reach(units, oldest, given, time.time())
+
+
+def ledger_reach(units, oldest, given, now):
+    """The earliest claim time a ledger holding `units` units, the oldest at `oldest`, and given `given` in
+    all, can still tell at `now`; None when it has pruned none and tells every claim (LEDGER REACH)."""
+    if isinstance(given, int) and not isinstance(given, bool) and given <= units:
+        return None
+    bounds = []
+    if units and _moment(oldest) is not None:
+        bounds.append(_moment(oldest))                  # every unit pruned is older than every unit kept
+    if units < LEDGER_UNITS:
+        bounds.append(now - LEDGER_DAYS * 86400)        # then only age pruned one, and only an older one
+    return min(bounds) if bounds else math.inf
 
 
 def another_route(row, paid) -> bool:
@@ -553,13 +590,28 @@ def another_route(row, paid) -> bool:
     return claim is not None and claim in paid.get(key, ())
 
 
+def beyond_reach(row, reach) -> bool:
+    """Whether the record was last claimed before its ledger can tell (LEDGER REACH): a unit paid at that
+    claim may be gone, so the route it went by cannot be known."""
+    claim = _moment(row["last_claim_at"])
+    return reach is not None and claim is not None and claim < reach
+
+
 def by_route(rows):
-    """(the records the standard route carried, how many another route did), which a report leaves out."""
+    """(the records the standard route carried, how many another route did, how many were claimed before
+    the ledger can tell), the last two of which a report leaves out."""
     if not rows:
-        return rows, 0
-    paid = paid_claims()
-    kept = [row for row in rows if not another_route(row, paid)]
-    return kept, len(rows) - len(kept)
+        return rows, 0, 0
+    paid, reach = paid_claims()
+    kept, routed, unknown = [], 0, 0
+    for row in rows:
+        if another_route(row, paid):
+            routed += 1
+        elif beyond_reach(row, reach):
+            unknown += 1
+        else:
+            kept.append(row)
+    return kept, routed, unknown
 
 
 def no_state() -> Refused:
@@ -613,7 +665,7 @@ def build(login: str, version: str | None = None, notes: dict | None = None) -> 
     if found is None:
         raise no_state()
     every, hidden = found
-    every, routed = by_route(every)
+    every, routed, unknown = by_route(every)
     timeline = engine_timeline(lines)
 
     rows, elsewhere, unplaced = [], 0, collections.Counter()
@@ -627,7 +679,8 @@ def build(login: str, version: str | None = None, notes: dict | None = None) -> 
             unplaced[why] += 1
     rows.sort(key=lambda row: _moment(row["detected_at"]))
     if notes is not None:
-        notes.update(hidden=hidden, elsewhere=elsewhere, unplaced=dict(unplaced), routed=routed)
+        notes.update(hidden=hidden, elsewhere=elsewhere, unplaced=dict(unplaced), routed=routed,
+                     route_unknown=unknown)
     if len(rows) > MAX_RECORDS:
         raise Refused("This machine has %d records on %s, and a report holds at most %d. Nothing was "
                       "written." % (len(rows), version, MAX_RECORDS))
@@ -903,14 +956,15 @@ def machine() -> dict:
             "engine version : %s" % (current or "not reported yet")
             + ("" if current is None or engine else " (from the log; the watcher has not written its report)")]
     # found: "yes", "none" (no state database yet) or "unreadable" (problem says why).
-    # other_route: how many another route carried (ANOTHER ROUTE), left out of total as hidden ones are.
+    # other_route: how many another route carried (ANOTHER ROUTE), and route_unknown how many were claimed
+    # before the ledger can tell (LEDGER REACH), both left out of total as hidden ones are.
     records = {"found": "yes", "total": None, "on_this_version": None, "other_versions": None,
-               "not_placed": None, "not_placed_why": {}, "other_route": None, "problem": None}
-    hidden = routed = None
+               "not_placed": None, "not_placed_why": {}, "other_route": None, "route_unknown": None, "problem": None}
+    hidden = routed = unknown = None
     try:
         found = state_rows()
         if found is not None:
-            rows, routed = by_route(found[0])
+            rows, routed, unknown = by_route(found[0])
             found = rows, found[1]
     except Refused as refused:
         found = None
@@ -923,7 +977,7 @@ def machine() -> dict:
             blocked = blocked or str(no_state())
     if found is not None:
         rows, hidden = found
-        records["other_route"] = routed
+        records.update(other_route=routed, route_unknown=unknown)
         timeline = engine_timeline(lines)
         on, elsewhere, unplaced = 0, 0, collections.Counter()
         for row in rows:
@@ -944,6 +998,9 @@ def machine() -> dict:
     if routed:
         said.append("other route    : %d sent by an advanced feature's own route, which a report leaves out"
                     % routed)
+    if unknown:
+        said.append("route unknown  : %d claimed before the advanced edition's spend ledger reaches back, which a "
+                    "report leaves out" % unknown)
     seen = sum(1 for _when, text in lines if current and passes_checks(text, current))
     checks = "local checks   : %s" % ("passed on this version (%d log line%s)" % (seen, "s"[:seen != 1])
                                       if seen else "not seen in the logs kept")
@@ -1016,12 +1073,14 @@ def facts(report: dict, raw: bytes, notes: dict | None = None) -> dict:
     left_out = None
     if notes is not None:
         unplaced = dict(sorted((notes.get("unplaced") or {}).items()))
-        routed = notes.get("routed") or 0
+        routed, unknown = notes.get("routed") or 0, notes.get("route_unknown") or 0
         left_out = {"hidden": notes["hidden"], "other_versions": notes["elsewhere"],
                     "not_placed": sum(unplaced.values()), "not_placed_why": unplaced, "other_route": routed,
+                    "route_unknown": unknown,
                     "text": "%d hidden with Clear history; %d on other engine versions; %s not placed"
                             % (notes["hidden"], notes["elsewhere"], _unplaced_text(notes))
-                            + ("; %d sent by an advanced feature's own route" % routed if routed else "")}
+                            + ("; %d sent by an advanced feature's own route" % routed if routed else "")
+                            + ("; %d claimed before the spend ledger reaches back" % unknown if unknown else "")}
         said.append("left out   : %s" % left_out["text"])
     said.append("SHA-256    : %s" % digest)
     return {"codex_version": report["codex_version"], "verdict": report["verdict"],

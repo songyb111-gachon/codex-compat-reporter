@@ -61,6 +61,7 @@ PRODUCT_APP = PRODUCT / "src" / "codex_auto_resume" / "runtime" / "app.py"
 PRODUCT_READER = PRODUCT / "build" / "community_report.py"
 
 NOW = float(int(time.time()) - 10 * 86400)
+DAY = 86400
 VERSION = "codex-cli 0.155.0-alpha.9.2"
 THREAD = "0a1b2c3d-0001-7000-8000-000000000001"
 TURN = "0a1b2c3d-0002-7000-8000-000000000002"
@@ -634,18 +635,23 @@ class StateDatabaseTests(unittest.TestCase):
 
 
 def spend_ledger(home, spends=(), columns=("spend_id", "at", "capability", "thread_id", "interruption_id"),
-                 user_version=2):
+                 user_version=2, pruned=()):
     """The advanced edition's config/advanced/advanced.sqlite, with its spend table as v0.6.11 makes it
-    (advanced state/schema.py) and these (interruption id, time) units in it."""
+    (advanced state/schema.py: spend_id AUTOINCREMENT) and these (interruption id, time) units in it - after
+    the `pruned` ones, which it was given first and has pruned since, as the product prunes its oldest."""
     folder = home / "config" / "advanced"
     folder.mkdir(parents=True, exist_ok=True)
     database = sqlite3.connect(folder / "advanced.sqlite")
-    database.execute("CREATE TABLE spend (%s)" % ", ".join(columns))
-    for key, at in spends:
+    database.execute("CREATE TABLE spend (%s)" % ", ".join(
+        "spend_id INTEGER PRIMARY KEY AUTOINCREMENT" if name == "spend_id" else name for name in columns))
+    for key, at in (*pruned, *spends):
         row = {"spend_id": None, "at": at, "capability": "goal_continuation", "thread_id": THREAD,
                "interruption_id": key}
         database.execute("INSERT INTO spend VALUES (%s)" % ", ".join("?" * len(columns)),
                          [row[name] for name in columns])
+    if pruned:
+        database.execute("DELETE FROM spend WHERE rowid IN (SELECT rowid FROM spend ORDER BY rowid LIMIT ?)",
+                         (len(pruned),))
     database.execute("PRAGMA user_version = %d" % user_version)
     database.commit()
     database.close()
@@ -666,11 +672,11 @@ class RouteTests(unittest.TestCase):
         return record(**{"interruption_id": ("%x" % number) * 64, "detected_at": NOW - 3000 - number,
                          "last_claim_at": NOW - 1800, **fields})
 
-    def outcome(self, rows, spends=None, ledger_version=2):
+    def outcome(self, rows, spends=None, ledger_version=2, pruned=()):
         notes = {}
         with Installation([record()] + rows, columns=SCHEMA_4_COLUMNS, user_version=4) as installation:
             if spends is not None:
-                spend_ledger(installation.home, spends, user_version=ledger_version)
+                spend_ledger(installation.home, spends, user_version=ledger_version, pruned=pruned)
             report = reporter.build(LOGIN, notes=notes)
             _code, out, _err = run_main("status")
         return report, notes, out
@@ -717,11 +723,54 @@ class RouteTests(unittest.TestCase):
                     ledger_version=version)
                 self.assertEqual((len(report["records"]), notes["routed"]), (3, 1))
 
+    def test_a_record_claimed_before_the_ledger_reaches_back_is_left_out_and_said(self):
+        """Its unit may be one the ledger pruned (LEDGER REACH): it is left out, counted and said."""
+        rows = [self.other(1, last_claim_at=NOW - 100 * DAY),        # before the ledger's 90 days: unknown
+                self.other(2, last_claim_at=NOW - 60 * DAY),         # within them
+                self.other(3, last_claim_at=None)]                   # never claimed, so never sent by any route
+        report, notes, out = self.outcome(rows, spends=[("9" * 64, NOW - 50 * DAY)],
+                                          pruned=[("9" * 64, NOW - 200 * DAY)])
+        self.assertEqual((len(report["records"]), notes["routed"], notes["route_unknown"]), (3, 0, 1))
+        self.assertIn("records here   : 3 in all: ", out)
+        self.assertIn("route unknown  : 1 claimed before the advanced edition's spend ledger reaches back, which a "
+                      "report leaves out\n", out)
+        self.assertNotIn("other route", out)
+        facts = reporter.facts(report, reporter.encode(report), notes)
+        self.assertEqual((facts["left_out"]["other_route"], facts["left_out"]["route_unknown"]), (0, 1))
+        self.assertTrue(facts["left_out"]["text"].endswith("; 0 not placed; 1 claimed before the spend ledger "
+                                                           "reaches back"))
+
+    def test_a_ledger_that_lost_no_unit_tells_every_claim(self):
+        rows = [self.other(1, last_claim_at=NOW - 300 * DAY), self.other(2, last_claim_at=NOW - 200 * DAY)]
+        report, notes, out = self.outcome(rows, spends=[("2" * 64, NOW - 200 * DAY)])
+        self.assertEqual((len(report["records"]), notes["routed"], notes["route_unknown"]), (2, 1, 0))
+        self.assertNotIn("route unknown", out)
+
+    def test_how_far_back_a_ledger_reaches(self):
+        old = NOW - 120 * DAY
+        cases = (
+            ("it was given no unit", (0, None, 0), None),
+            ("it lost none", (3, NOW - 400 * DAY, 3), None),
+            ("lost, fewer than it keeps by count", (3, NOW - 10 * DAY, 5), NOW - 90 * DAY),
+            ("lost, its oldest older than 90 days: no pruning since", (3, old, 5), old),
+            ("lost every unit", (0, None, 4), NOW - 90 * DAY),
+            ("pruned by count", (5000, NOW - 20 * DAY, 6000), NOW - 20 * DAY),
+            ("pruned by count, more than it keeps now", (5100, NOW - 20 * DAY, 6000), NOW - 20 * DAY),
+            ("no count kept by SQLite", (2, NOW - 10 * DAY, None), NOW - 90 * DAY))
+        for name, (units, oldest, given), reach in cases:
+            with self.subTest(name):
+                self.assertEqual(reporter.ledger_reach(units, oldest, given, NOW), reach)
+        self.assertEqual((reporter.LEDGER_DAYS, reporter.LEDGER_UNITS), (90, 5000))
+        # A claim at the reach itself is told; one a moment before it is not, and one never made is never sent.
+        self.assertEqual([reporter.beyond_reach({"last_claim_at": at}, old) for at in (old, old - 0.5, None)],
+                         [False, True, False])
+        self.assertFalse(reporter.beyond_reach({"last_claim_at": NOW - 900 * DAY}, None))
+
     def test_no_ledger_or_an_empty_one_leaves_every_record_in(self):
         for spends in (None, []):
             with self.subTest(spends):
                 report, notes, _out = self.outcome([self.other(1)], spends=spends)
-                self.assertEqual((len(report["records"]), notes["routed"]), (2, 0))
+                self.assertEqual((len(report["records"]), notes["routed"], notes["route_unknown"]), (2, 0, 0))
 
     def test_a_ledger_it_cannot_read_is_refused_not_passed_over(self):
         every = ("spend_id", "at", "capability", "thread_id", "interruption_id")
@@ -1527,12 +1576,14 @@ GH_KEYS = {"path", "signed_in", "login"}
 SURVEY_KEYS = {"ok", "tool_version", "installation", "product_version", "engine_version", "engine_from_log",
                "records", "hidden", "local_checks", "report_file", "blocked", "lines", "gh", "default_login"}
 RECORDS_KEYS = {"found", "total", "on_this_version", "other_versions", "not_placed", "not_placed_why", "other_route",
+                "route_unknown",
                 "problem", "text"}
 REPORT_KEYS = {"ok", "path", "codex_version", "verdict", "login", "records", "span", "bytes", "sha256",
                "left_out", "lines", "kept", "said"}
 REPORT_FILE_KEYS = {"path", "name", "exists", "already"}
 LOGIN_KEYS = {"ok", "login", "said", "gh"}
-LEFT_OUT_KEYS = {"hidden", "other_versions", "not_placed", "not_placed_why", "other_route", "text"}
+LEFT_OUT_KEYS = {"hidden", "other_versions", "not_placed", "not_placed_why", "other_route", "route_unknown",
+                 "text"}
 SUBMIT_KEYS = {"ok", "file", "bytes", "sha256", "codex_version", "verdict", "records", "login", "repository",
                "target", "branch", "fork", "fork_exists", "branch_exists", "gh", "writes", "url", "written",
                "after", "checked", "sending", "lines"}
@@ -1602,7 +1653,7 @@ class JsonSurveyTests(Guided):
         why = "no engine line before it in the logs kept"
         self.assertEqual(found["records"], {
             "found": "yes", "total": 3, "on_this_version": 1, "other_versions": 1, "not_placed": 1,
-            "not_placed_why": {why: 1}, "other_route": 0, "problem": None,
+            "not_placed_why": {why: 1}, "other_route": 0, "route_unknown": 0, "problem": None,
             "text": "records here   : 3 in all: 1 on this engine version, 1 on other versions, 1 (1: %s) not placed"
                     % why})
         self.assertEqual(found["hidden"], 1)
@@ -1682,7 +1733,7 @@ class JsonReportTests(unittest.TestCase):
         self.assertEqual(set(found["left_out"]), LEFT_OUT_KEYS)
         self.assertEqual((found["left_out"]["hidden"], found["left_out"]["other_versions"],
                           found["left_out"]["not_placed"], found["left_out"]["not_placed_why"],
-                          found["left_out"]["other_route"]), (1, 0, 0, {}, 0))
+                          found["left_out"]["other_route"], found["left_out"]["route_unknown"]), (1, 0, 0, {}, 0, 0))
         code, out, _err = run_main("report", "--login", LOGIN, "--out", str(self.work / "in-words.json"))
         self.assertEqual(code, 0)
         self.assertEqual((self.work / "in-words.json").read_bytes(), written, "one clock, one report")

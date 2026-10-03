@@ -169,7 +169,7 @@ machine.
 | Command and option | What it does |
 | --- | --- |
 | `guide` | What `Report.cmd` runs: `status`, `report` and `submit`, one question at a time. It offers the login `gh` is signed in as, never writes over a file already there without a yes, opens the report in Notepad and the project's page in your browser only on a yes, and sends only when you type `send` - then exactly as `submit --yes` would, with the file's SHA-256 pinned as it was when you were asked. Without `gh` signed in as your login, it keeps the file and says how to send it on the web. Every question's default sends nothing. |
-| `status` | Prints the installed product version, the Codex version it sees, how many records exist here (on this Codex version, on others, and not placed on any, with the reason), how many are hidden with Clear history, how many an advanced-edition feature sent by a route of its own (when any did), and whether the product's own checks passed on this version. Writes nothing. |
+| `status` | Prints the installed product version, the Codex version it sees, how many records exist here (on this Codex version, on others, and not placed on any, with the reason), how many are hidden with Clear history, how many an advanced-edition feature sent by a route of its own and how many were claimed before its spend ledger reaches back (when there are any), and whether the product's own checks passed on this version. Writes nothing. |
 | `report --login LOGIN` | Writes the report for the Codex version installed now, filed under your GitHub login. Required. |
 | `report --codex-version VERSION` | Reports on another Codex version this machine has records for, as `0.155.0` or `codex-cli 0.155.0`. `--version` is the same option. |
 | `report --out FILE` | Writes the report to FILE instead of `codex-cli-<version>.json` in the current folder. The name you choose stays on your machine; see `submit`. |
@@ -201,7 +201,7 @@ Codex home is `%USERPROFILE%\.codex` unless `CODEX_HOME` does.
 | --- | --- |
 | `.codex-auto-resume\app\.codex-plugin\plugin.json` | the installed product version |
 | `.codex-auto-resume\config\state.sqlite` | the recovery records: when each was detected, delivered and how it ended, its category, state and reason, which gates it passed, the thread and turn ids that key the count below, and the interruption id, client id and claim time that tell a record another route sent (below). Records hidden with Clear history are left out. |
-| `.codex-auto-resume\config\advanced\advanced.sqlite` | only where the advanced edition keeps it: its spend ledger's interruption ids and times, which name the sends an advanced feature paid for |
+| `.codex-auto-resume\config\advanced\advanced.sqlite` | only where the advanced edition keeps it: its spend ledger's interruption ids and times, which name the sends an advanced feature paid for, its schema, and how many units it holds and was ever given, which say how far back it can tell |
 | `.codex-auto-resume\logs\auto-resume.log` and `auto-resume.log.1` to `.5` | which Codex version was running around each record, and whether the product's own checks passed on it |
 | `.codex-auto-resume\config\compatibility.json` | what the watcher itself concluded about the Codex installed now |
 | `.codex\thread_history_*.sqlite` (the newest) | how many items of each kind the recovered turn produced |
@@ -214,8 +214,11 @@ same database. Counted, they would make the standard route look better or worse 
 than it was, and a report has no field to label them with. So each such record is left out, counted
 and said, as a hidden one is, by the marks the product itself writes: the client id it gives a
 marker-free continuation, a gate word only the edition's features write, and a unit the edition's
-spend ledger paid at the claim the record was sent from. Nothing is guessed: a record no mark names
-is the standard route's, which is every record on a standard installation.
+spend ledger paid at the claim the record was sent from. That ledger keeps a unit 90 days at most, and
+5,000 of them, so once it has let one go, a record last claimed before what it can still vouch for may
+have lost its mark: it is left out too, counted and said as a record whose route is unknown. Nothing is
+guessed: a record no mark names, claimed where the ledger can still tell, is the standard route's,
+which is every record on a standard installation.
 
 Thread, turn and interruption ids, and the paths of these files, are read and used on your machine
 only; they are never written into the report and never sent. One query passes over your conversation itself: to
