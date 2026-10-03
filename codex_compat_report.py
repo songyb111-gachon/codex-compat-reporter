@@ -73,7 +73,7 @@ import time
 import traceback
 import uuid
 
-__version__ = "1.4.1"
+__version__ = "1.5.0"
 
 REPO = "songyb111-gachon/codex-auto-resume-windows"
 HOST = "github.com"                             # every GitHub call names it; GH_HOST never redirects one

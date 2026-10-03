@@ -2,7 +2,7 @@
 Report.exe on its own.
 
     python tools/make_exe.py                                    # Report.exe, beside codex_compat_report.py
-    python tools/make_release.py --version 1.4.1 --out dist
+    python tools/make_release.py --version 1.5.0 --out dist
 
 It writes codex-compat-reporter-<version>.zip, holding FILES under one folder of that name and
 nothing else, and CodexCompatReporter-<version>.exe, the very bytes of the Report.exe in that ZIP,
