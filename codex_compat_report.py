@@ -532,8 +532,9 @@ def another_route(row, paid) -> bool:
     key = row["interruption_id"]
     if isinstance(key, str) and row["recovery_client_id"] == str(uuid.uuid5(CONTINUATION_NAMESPACE, key)):
         return True
-    if any(name != "consent" and isinstance(gate, list) and len(gate) == 2 and gate[1] in PLUG_WORDS
-           for name, gate in _gates(row).items()):
+    # The word is a string where the product wrote it; anything else (a damaged or hand-edited file) is no mark.
+    if any(name != "consent" and isinstance(gate, list) and len(gate) == 2 and isinstance(gate[1], str)
+           and gate[1] in PLUG_WORDS for name, gate in _gates(row).items()):
         return True
     claim = _moment(row["last_claim_at"])
     return claim is not None and claim in paid.get(key, ())

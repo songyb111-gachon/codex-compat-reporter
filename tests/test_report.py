@@ -595,6 +595,21 @@ class StateDatabaseTests(unittest.TestCase):
                     report = reporter.build(LOGIN)
                 self.assertEqual(report["records"][0]["gates_passed"], 0)
 
+    def test_a_gate_word_of_the_wrong_shape_is_no_mark_and_never_a_traceback(self):
+        """A gate's word is a string where the product writes it. A list or an object there (a damaged or
+        hand-edited file) marks no other route: the record is read as 1.4.1 read it."""
+        for word in (["held"], {"plugged": 1}, 7, None):
+            with self.subTest(word):
+                vector = json.loads(GATES)
+                vector["usage"] = ["PASS", word]
+                notes = {}
+                with Installation([record(gate_eval=json.dumps(vector))]) as installation:
+                    report = reporter.build(LOGIN, notes=notes)
+                    code, _out, err = run_main("report", "--login", LOGIN, "--out", str(installation.root / "r.json"))
+                self.assertEqual((len(report["records"]), notes["routed"]), (1, 0))
+                self.assertEqual(report["records"][0]["gates_passed"], 4)
+                self.assertEqual((code, err), (0, ""))
+
     def test_a_home_whose_folder_names_hold_hash_and_percent_is_read_and_not_written(self):
         with Installation([record()], under="a#b%41") as installation:
             before = installation.snapshot()
