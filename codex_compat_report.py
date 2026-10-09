@@ -73,7 +73,7 @@ import time
 import traceback
 import uuid
 
-__version__ = "1.5.0"
+__version__ = "1.5.1"
 
 REPO = "songyb111-gachon/codex-auto-resume-windows"
 HOST = "github.com"                             # every GitHub call names it; GH_HOST never redirects one
@@ -237,7 +237,7 @@ SPEND = ("interruption_id", "at")                 # the spend ledger's columns r
 # 2, from v0.6.11-beta.2 (advanced state/schema.py SCHEMA_VERSION, the same through v0.6.12-alpha.2). Version 2
 # added arming.warnings and left the spend table as it was. A newer ledger is refused, as a newer state is:
 # it could keep its units otherwise, and what it leaves out would change with no word said.
-LEDGER_SCHEMAS = (1, 2)
+LEDGER_SCHEMAS = (1, 2, 3)
 
 # LEDGER REACH. The ledger is the one lasting mark of the goal continuation's channel, and of its route once
 # core has written that record's next gates over `plugged`, and it does not keep its units for ever: both of

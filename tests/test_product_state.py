@@ -372,7 +372,7 @@ class ProductStateTests(unittest.TestCase):
     def test_a_ledger_schema_it_does_not_know_is_refused_on_the_products_own_ledger(self):
         with reporter.readonly(self.root / "v4" / "config" / "advanced" / "advanced.sqlite") as ledger:
             self.assertIn(ledger.execute("PRAGMA user_version").fetchone()[0], reporter.LEDGER_SCHEMAS)
-        for version, said in ((3, r"newer Codex Auto Resume than this reporter knows \(ledger schema 3\)\. "
+        for version, said in ((4, r"newer Codex Auto Resume than this reporter knows \(ledger schema 4\)\. "
                                   r"Update codex-compat-reporter\."),
                               (0, r"has ledger schema 0, which no Codex Auto Resume this reporter knows writes")):
             with self.subTest(version):

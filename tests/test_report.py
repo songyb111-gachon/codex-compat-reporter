@@ -713,8 +713,8 @@ class RouteTests(unittest.TestCase):
         self.assertEqual((len(report["records"]), notes["routed"]), (2, 3))
 
     def test_a_unit_the_spend_ledger_paid_at_its_last_claim_leaves_it_out(self):
-        self.assertEqual(reporter.LEDGER_SCHEMAS, (1, 2))
-        for version in reporter.LEDGER_SCHEMAS:             # v0.6.11-alpha's ledger, and v0.6.11-beta.2's on
+        self.assertEqual(reporter.LEDGER_SCHEMAS, (1, 2, 3))
+        for version in reporter.LEDGER_SCHEMAS:             # v0.6.11-alpha's ledger, v0.6.11-beta.2's on, v0.6.14-beta's on
             with self.subTest(version):
                 report, notes, _out = self.outcome([self.other(1), self.other(2), self.other(3)], spends=[
                     ("1" * 64, NOW - 1800),          # the claim it was sent from: the goal continuation's channel
@@ -779,7 +779,7 @@ class RouteTests(unittest.TestCase):
                 ("no interruption ids", ("spend_id", "at", "capability", "thread_id"), 2,
                  "does not hold the spend ledger.*Update codex-compat-reporter"),
                 # A newer ledger, even with the same columns, could keep its units otherwise.
-                ("a newer ledger", every, 3, r"newer Codex Auto Resume than this reporter knows \(ledger schema 3\)\. "
+                ("a newer ledger", every, 4, r"newer Codex Auto Resume than this reporter knows \(ledger schema 4\)\. "
                                              r"Update codex-compat-reporter\."),
                 ("no ledger schema", every, 0, "has ledger schema 0, which no Codex Auto Resume this reporter knows")):
             with self.subTest(name):
