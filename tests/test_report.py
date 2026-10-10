@@ -75,6 +75,11 @@ COLUMNS = ("interruption_id", "thread_id", "turn_id", "category", "state", "last
 # What schema 4 added to interruptions (the product's store/columns.py _SCHEMA_4_COLUMNS, v0.6.11).
 SCHEMA_4_COLUMNS = COLUMNS + ("not_before", "hold", "task_print", "context_tokens", "objection_at",
                               "objection_until")
+# What schema 5 added to interruptions (store/columns.py _SCHEMA_5_COLUMNS, v0.6.15-beta): the Codex home a record
+# is of, '' for the default home - every record before, and every one of a watcher that watches one home.
+SCHEMA_5_COLUMNS = SCHEMA_4_COLUMNS + ("home_key",)
+# Another home's key: the SHA-256 its lock is named by (win/homelock.py), here of a made-up lock name.
+OTHER_HOME = hashlib.sha256(b"codex-home-ExampleUser-second").hexdigest()
 GATES = json.dumps({"engine_compatible": ["PASS", "ok"], "identity": ["PASS", "ok"],
                     "thread_available": ["PASS", "ok"], "usage": ["PASS", "ok"]})
 # The sixteen capabilities the product's watcher judges (compat/model.py CAPABILITIES).
@@ -539,9 +544,9 @@ class StateDatabaseTests(unittest.TestCase):
     """What the state database may be, and what the reporter says when it is something else."""
 
     def test_a_newer_schema_is_refused_rather_than_read_as_todays(self):
-        for version in (5, 40):
+        for version in (6, 40):
             with self.subTest(version):
-                with Installation([record()], user_version=version, columns=SCHEMA_4_COLUMNS):
+                with Installation([record(home_key="")], user_version=version, columns=SCHEMA_5_COLUMNS):
                     with self.assertRaisesRegex(reporter.Refused, r"newer Codex Auto Resume than this reporter "
                                                                   r"knows \(schema %d\)\. Update codex-compat-reporter\."
                                                                   % version):
@@ -551,7 +556,7 @@ class StateDatabaseTests(unittest.TestCase):
         for version in (0, 1, 2):
             with self.subTest(version):
                 with Installation([record()], user_version=version):
-                    with self.assertRaisesRegex(reporter.Refused, r"v0\.6\.0 or newer \(schema 3 or 4\)"):
+                    with self.assertRaisesRegex(reporter.Refused, r"v0\.6\.0 or newer \(schema 3, 4 or 5\)"):
                         reporter.build(LOGIN)
 
     def test_schema_3_and_schema_4_are_read_alike(self):
@@ -569,6 +574,61 @@ class StateDatabaseTests(unittest.TestCase):
                 self.assertIn("records here   : 2 in all: 2 on this engine version", out)
                 reports[version] = dict(report, recorded_at=None)
         self.assertEqual(reports[3], reports[4])
+
+    def test_schema_5_with_every_record_the_default_homes_reads_as_schema_4(self):
+        """v0.6.15-beta writes schema 5, which only adds: home_key '' on every record of the default home, as a
+        migrated state and a watcher of one home have it, and the report is its schema-4 twin's."""
+        rows = [record(), record(interruption_id="b" * 64, state="recovery_turn_failed", last_error="turn_failed",
+                                 recovery_turn_status="failed", detected_at=NOW - 3500)]
+        reports = {}
+        for version, columns in ((4, SCHEMA_4_COLUMNS), (5, SCHEMA_5_COLUMNS)):
+            with self.subTest(version):
+                with Installation([dict(row, home_key="") for row in rows], user_version=version, columns=columns):
+                    report = reporter.build(LOGIN)
+                    _code, out, _err = run_main("status")
+                self.assertIn("records here   : 2 in all: 2 on this engine version", out)
+                self.assertIsNotNone(report["records"][0]["progress_items"], "the default home's history is read")
+                reports[version] = dict(report, recorded_at=None)
+        self.assertEqual(reports[4], reports[5])
+
+    def test_schema_5_without_home_key_is_refused(self):
+        with Installation([record()], user_version=5, columns=SCHEMA_4_COLUMNS):
+            with self.assertRaisesRegex(reporter.Refused, "missing: home_key"):
+                reporter.build(LOGIN)
+
+    def test_a_record_of_another_codex_home_counts_and_its_home_is_never_said(self):
+        """A record of a further Codex home is this PC's record of the same product, on the same engine, by the
+        standard route (HOMES): counted as the default home's are. Its turns are in that home's history, which is
+        not read, so its progress is not counted - never the default home's counts for the same conversation, which
+        a copied home has too - and nothing written or printed carries its home_key."""
+        rows = [record(home_key=""),
+                record(interruption_id="b" * 64, detected_at=NOW - 3500, home_key=OTHER_HOME)]  # the same thread and turn
+        notes = {}
+        with Installation(rows, user_version=5, columns=SCHEMA_5_COLUMNS) as installation,                 mock.patch.object(reporter.time, "time", return_value=NOW + 60):
+            report = reporter.build(LOGIN, notes=notes)
+            work = installation.root / "work"
+            work.mkdir()
+            said = [run_main("status"), run_main("report", "--login", LOGIN, "--out", str(work / "r.json")),
+                    run_main("report", "--login", LOGIN, "--out", str(work / "j.json"), "--json")]
+            with contextlib.chdir(work):
+                found = reporter.machine()               # what `survey` answers a window, but gh's facts
+            said.append((0, json.dumps(found), ""))
+            written = [path.read_text(encoding="ascii") for path in sorted(work.iterdir())]
+        self.assertEqual([code for code, _out, _err in said], [0, 0, 0, 0])
+        self.assertEqual(len(report["records"]), 2)
+        self.assertEqual((notes["hidden"], notes["routed"], notes["route_unknown"], notes["elsewhere"]), (0, 0, 0, 0))
+        self.assertEqual([entry["state"] for entry in report["records"]], ["recovered", "recovered"])
+        self.assertEqual(report["records"][0]["progress_items"],
+                         {"agentMessage": 2, "commandExecution": 0, "fileChange": 1, "mcpToolCall": 0})
+        self.assertIsNone(report["records"][1]["progress_items"], "another home's history is not this one")
+        self.assertEqual(report["capabilities"]["exact_thread_recovery"]["confirmed"], 2)
+        self.assertEqual(reporter.validate(reporter.encode(report))[1], [])
+        self.assertIn("records here   : 2 in all: 2 on this engine version", said[0][1])
+        self.assertEqual(len(written), 2)
+        for text in [reporter.encode(report).decode("ascii")] + written + [out + err for _code, out, err in said]:
+            self.assertNotIn(OTHER_HOME, text)
+            self.assertNotIn("home_key", text)
+            self.assertNotIn(OTHER_HOME[:16], text)
 
     def test_a_missing_column_or_table_is_refused(self):
         without = tuple(name for name in COLUMNS if name != "outcome_at")
@@ -713,8 +773,9 @@ class RouteTests(unittest.TestCase):
         self.assertEqual((len(report["records"]), notes["routed"]), (2, 3))
 
     def test_a_unit_the_spend_ledger_paid_at_its_last_claim_leaves_it_out(self):
-        self.assertEqual(reporter.LEDGER_SCHEMAS, (1, 2, 3))
-        for version in reporter.LEDGER_SCHEMAS:             # v0.6.11-alpha's ledger, v0.6.11-beta.2's on, v0.6.14-beta's on
+        self.assertEqual(reporter.LEDGER_SCHEMAS, (1, 2, 3, 4))
+        # v0.6.11-alpha's ledger, v0.6.11-beta.2's on, v0.6.14-beta's on, v0.6.15-beta's on
+        for version in reporter.LEDGER_SCHEMAS:
             with self.subTest(version):
                 report, notes, _out = self.outcome([self.other(1), self.other(2), self.other(3)], spends=[
                     ("1" * 64, NOW - 1800),          # the claim it was sent from: the goal continuation's channel
@@ -779,7 +840,7 @@ class RouteTests(unittest.TestCase):
                 ("no interruption ids", ("spend_id", "at", "capability", "thread_id"), 2,
                  "does not hold the spend ledger.*Update codex-compat-reporter"),
                 # A newer ledger, even with the same columns, could keep its units otherwise.
-                ("a newer ledger", every, 4, r"newer Codex Auto Resume than this reporter knows \(ledger schema 4\)\. "
+                ("a newer ledger", every, 5, r"newer Codex Auto Resume than this reporter knows \(ledger schema 5\)\. "
                                              r"Update codex-compat-reporter\."),
                 ("no ledger schema", every, 0, "has ledger schema 0, which no Codex Auto Resume this reporter knows")):
             with self.subTest(name):

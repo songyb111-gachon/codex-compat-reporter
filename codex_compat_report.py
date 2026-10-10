@@ -86,14 +86,22 @@ CODEX = pathlib.Path(os.environ.get("CODEX_HOME") or (HOME / ".codex"))
 
 EXIT_OK, EXIT_REFUSED, EXIT_NOT_OPEN = 0, 2, 3
 # The state database's user_versions this reporter reads, and no others: 3, written by Codex Auto Resume
-# v0.6.0 to v0.6.11-alpha, and 4, from v0.6.11-beta (its store/schema.py SCHEMA_VERSION). Schema 4 added
-# columns and a table - interruptions.not_before, hold, task_print, context_tokens, objection_at and
-# objection_until, threads.tier, settings.observe_only, six watcher_status columns and the notices table
+# v0.6.0 to v0.6.11-alpha, 4, from v0.6.11-beta, and 5, from v0.6.15-beta (its store/schema.py SCHEMA_VERSION).
+# Schema 4 added columns and a table - interruptions.not_before, hold, task_print, context_tokens, objection_at
+# and objection_until, threads.tier, settings.observe_only, six watcher_status columns and the notices table
 # (store/columns.py _SCHEMA_4_COLUMNS) - and changed none: every column COLUMNS reads is written as it was,
 # and every word it is compared with is the same word (store/migrations.py _migrate_3_to_4 adds them empty,
 # with no backfill; domain/vocabulary.py's RecordState, FailureCategory and TurnStatus are v0.6.10's).
-# A newer schema is refused rather than read as today's, and so is an older one.
-SCHEMAS = (3, 4)
+# Schema 5 added two more and changed none: interruptions.home_key and watcher_status.homes (store/columns.py
+# _SCHEMA_5_COLUMNS; store/migrations.py _migrate_4_to_5 adds them with no backfill, every record before the
+# default home's, home_key ''). The columns COLUMNS reads are v0.6.14's, written by the same store/records.py
+# RecordsMixin.register and the same claims; RecordState, FailureCategory and TurnStatus are v0.6.14's word for
+# word, and so are the gate words (machine.PASS, WAIT, PLUGGED, HELD) - only the reasons grew, by home_removed,
+# home_not_watched, window_ended and not_delivered_on_open (domain/reason_vocabulary.py ReasonCode, moved there
+# from vocabulary.py), which REASONS does not name and a report so writes as "other", as any word it has not met.
+# What home_key means for a report is in HOMES, below. A newer schema is refused rather than read as today's,
+# and so is an older one.
+SCHEMAS = (3, 4, 5)
 MINIMUM_PRODUCT = "v0.6.0"
 MAX_BYTES, MAX_RECORDS = 1_000_000, 500       # the receiving side's limits, compat_admin.py
 
@@ -192,13 +200,29 @@ REASONS = frozenset({
     "usage_unavailable", "usage_unknown", "user_cancelled", "user_input_queued", "user_joined",
     "user_queued_input", "waiting_reset", "withdraw_unconfirmed"})
 
-# The columns read from the state database, and nothing else, all of them in schema 3 and 4 alike.
+# The columns read from the state database, and nothing else, all of them in schema 3, 4 and 5 alike - and, in
+# schema 5 alone, home_key (HOMES, below).
 # thread_id and recovery_turn_id only key the progress count below; history_hidden_at only leaves
 # hidden records out; interruption_id, recovery_client_id and last_claim_at only tell a record
 # another route carried (ANOTHER ROUTE).
 COLUMNS = ("thread_id", "category", "state", "last_error", "detected_at", "resumed_at", "outcome_at",
            "submitted_at", "recovery_turn_id", "recovery_turn_status", "gate_eval", "reset_at",
            "limit_type", "history_hidden_at", "interruption_id", "recovery_client_id", "last_claim_at")
+
+# HOMES. From schema 5 a watcher can watch up to three Codex homes beside the default one, and each record says
+# which with home_key: '' for the default home - every record of schema 3 and 4, and of a schema-5 state watching
+# one home - or the SHA-256 that home's lock is named by (win/homelock.py). A record of another home is this PC's
+# own record of the same product on the same engine, and is counted like the default home's: its engine has the
+# NULL plug, so the advanced edition never carries it by a route of its own and it is always the standard route's;
+# it is sent with the one codex.exe the default home's discovery found, so the engine lines of the one log place
+# it as they place every record; and its gates and states are core's (runtime/homes.py, runtime/app.py
+# home_engine). What it does not share is its history: its turns are in that home's thread_history, which this
+# reporter does not read - it reads only the Codex home CODEX names, and never a home's path or alias from
+# Settings - so its progress_items are null, as they are for any record whose history is not there to count, never
+# the counts of the default home's history, where the same conversation may well be too (a copied home). home_key
+# itself is read only to know that, and goes nowhere: no report, status line or JSON answer carries it, a count of
+# homes, or anything else that tells one home from another.
+HOME_KEY = "home_key"
 
 # ANOTHER ROUTE. A report is about one route: the standard edition's, which sends every continuation with
 # `codex queue --thread/--message`, ends its words with the record's marker and proves delivery by finding
@@ -233,11 +257,18 @@ COLUMNS = ("thread_id", "category", "state", "last_error", "detected_at", "resum
 CONTINUATION_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "urn:codex-auto-resume:continuation-client-id")
 PLUG_WORDS = frozenset({"plugged", "held"})       # gate words only the edition's plug writes, at any gate but consent
 SPEND = ("interruption_id", "at")                 # the spend ledger's columns read, and nothing else
-# The spend ledger's user_versions this reporter reads, and no others: 1, written by v0.6.11-alpha and -beta, and
-# 2, from v0.6.11-beta.2 (advanced state/schema.py SCHEMA_VERSION, the same through v0.6.12-alpha.2). Version 2
-# added arming.warnings and left the spend table as it was. A newer ledger is refused, as a newer state is:
-# it could keep its units otherwise, and what it leaves out would change with no word said.
-LEDGER_SCHEMAS = (1, 2, 3)
+# The spend ledger's user_versions this reporter reads, and no others: 1, written by v0.6.11-alpha and -beta,
+# 2, from v0.6.11-beta.2 (advanced state/schema.py SCHEMA_VERSION, the same through v0.6.12-alpha.2), 3, from
+# v0.6.14-beta, and 4, from v0.6.15-beta. Version 2 added arming.warnings, version 3 the reset actions' tables
+# (state/schema.py _STATEMENTS_V3, RESET_TABLES), and version 4 the continuations, keep_going and prompts tables
+# and records.queue_id and withdraw (_STATEMENTS_V4, UPGRADE_FROM_3), and each left the spend table as it was:
+# TABLES["spend"] is still (spend_id, at, capability, thread_id, interruption_id), AUTOINCREMENT, paid by the
+# same state record_spend inside the claim (ledger.py ClaimLedger.claim - its new queue-for-open answer pays
+# with it too, at that claim's time, so a record it queued is left out as another route's like any paid one),
+# and pruned by the same journal.py _prune_spend (90 days, 5,000 units). None of version 4's tables is read:
+# they hold the edition's own records, which are never core's interruptions. A newer ledger is refused, as a
+# newer state is: it could keep its units otherwise, and what it leaves out would change with no word said.
+LEDGER_SCHEMAS = (1, 2, 3, 4)
 
 # LEDGER REACH. The ledger is the one lasting mark of the goal continuation's channel, and of its route once
 # core has written that record's next gates over `plugged`, and it does not keep its units for ever: both of
@@ -506,15 +537,17 @@ def state_rows():
                               "(schema %d). Update codex-compat-reporter." % (path, found))
             if found not in SCHEMAS:
                 raise Refused("%s has schema %d; this reporter needs Codex Auto Resume %s or newer "
-                              "(schema %s)." % (path, found, MINIMUM_PRODUCT, " or ".join(map(str, SCHEMAS))))
+                              "(schema %s or %d)." % (path, found, MINIMUM_PRODUCT, ", ".join(map(str, SCHEMAS[:-1])),
+                                                      SCHEMAS[-1]))
             present = {row[1] for row in db.execute("PRAGMA table_info(interruptions)")}
-            missing = [name for name in COLUMNS if name not in present]
+            read = COLUMNS + ((HOME_KEY,) if found >= 5 else ())     # HOMES: a column of schema 5 alone
+            missing = [name for name in read if name not in present]
             if missing:
                 raise Refused("%s does not hold the records this reporter reads (missing: %s). It "
                               "needs Codex Auto Resume %s or newer." % (path, ", ".join(missing), MINIMUM_PRODUCT))
             db.row_factory = sqlite3.Row
             rows = [dict(row) for row in db.execute(
-                "SELECT %s FROM interruptions WHERE history_hidden_at IS NULL" % ", ".join(COLUMNS))]
+                "SELECT %s FROM interruptions WHERE history_hidden_at IS NULL" % ", ".join(read))]
             hidden = db.execute("SELECT count(*) FROM interruptions "
                                 "WHERE history_hidden_at IS NOT NULL").fetchone()[0]
     except sqlite3.Error as error:
@@ -746,7 +779,8 @@ def build(login: str, version: str | None = None, notes: dict | None = None) -> 
             "turn_status": known(row["recovery_turn_status"], TURN_STATUSES),
             "gates_passed": sum(1 for gate in _gates(row).values()
                                 if isinstance(gate, list) and gate and gate[0] == "PASS"),
-            "progress_items": progress_items(row["thread_id"], row["recovery_turn_id"]),
+            # HOMES: another Codex home's turns are not in the history this reporter reads.
+            "progress_items": None if row.get(HOME_KEY) else progress_items(row["thread_id"], row["recovery_turn_id"]),
         } for row in rows],
         "capabilities": {name: capabilities[name] for name in sorted(capabilities)},
         "note": "Content-free: counts, states and times from this machine's own records, with no conversation "

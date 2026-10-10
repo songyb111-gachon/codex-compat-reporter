@@ -2,7 +2,8 @@
 
 The other tests build the product's state by hand, in the columns the reporter reads. These have the
 product make it, from its own tags: schema 3 by v0.6.10's store, schema 4 by v0.6.11's - fresh, and
-migrated from v0.6.10's - with every record registered and claimed by that store and then carried to
+migrated from v0.6.10's - and schema 5, with the advanced edition's file of version 4, by v0.6.15-beta's (its
+branch until that tag is made), with every record registered and claimed by that store and then carried to
 where it ends in the store's own columns, as the engine's watch would carry it; and, at v0.6.11, the
 advanced edition's own claim ledger paying for the sends its goal continuation carries, and pruning
 those units 90 days on, as its watcher would. The reporter
@@ -50,6 +51,8 @@ PRODUCT = pathlib.Path(os.environ.get("CAR_CHECKOUT") or HERE.parent.parent / "c
 GIT = shutil.which("git")
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 SCHEMA_3, SCHEMA_4 = "v0.6.10", "v0.6.11"        # the last release of each schema's first line
+# Schema 5's first release, or, until its tag is made, the branch it is built on.
+SCHEMA_5_REFS = ("v0.6.15-beta", "v0614-beta2")
 VERSION = "codex-cli 0.158.0"
 LOGIN = "someone"
 
@@ -106,14 +109,20 @@ written = {}
 
 
 def make(name, number, *, state, reason, delivered=True, ledger=None, carried=(), client=None, gate_eval=None,
-         hidden=False, turn_status="completed", claims=1):
-    """One record, registered and claimed by the store, then carried to where it ends in its own columns."""
+         hidden=False, turn_status="completed", claims=1, home=""):
+    """One record, registered and claimed by the store, then carried to where it ends in its own columns - of
+    the default Codex home, or (schema 5) of the home whose key `home` is, with the id that home's engine gives."""
     interruption = key(name)
     at = base + number * 3600
     record = {"thread_id": uuid_of(number, 1), "turn_id": uuid_of(number, 2), "completed_at": at - 60,
               "started_at": at - 600, "ordinal": 3, "interruption_id": interruption, "reset_at": at - 30,
               "limit_type": "codex:primary", "uncertain": False, "category": "usage_limit"}
-    assert store.register(record, at, state="waiting_poll", next_retry_at=at)
+    if home:
+        from codex_auto_resume.domain import ids
+        interruption = ids.interruption_id(record["thread_id"], record["turn_id"], record["completed_at"],
+                                           record["ordinal"], home_key=home)
+        record["interruption_id"] = interruption
+    assert store.register(record, at, state="waiting_poll", next_retry_at=at, **({"home_key": home} if home else {}))
     claimed_at = None
     for claim in range(claims):
         claimed_at = at + 60.5 + claim * 900
@@ -139,8 +148,8 @@ def make(name, number, *, state, reason, delivered=True, ledger=None, carried=()
 make("worked", 1, state="recovered", reason="progress_observed")
 make("failed", 2, state="recovery_turn_failed", reason="turn_failed", turn_status="failed")
 make("hidden", 3, state="recovered", reason="progress_observed", hidden=True)
-if mode == "v4":
-    assert SCHEMA_VERSION == 4
+if mode in ("v4", "v5", "v5 homes"):
+    assert SCHEMA_VERSION == (4 if mode == "v4" else 5)
     from codex_auto_resume.domain import ids
     from codex_auto_resume.domain.plug import Plug, Point
     from codex_auto_resume_advanced.ledger import ClaimLedger
@@ -176,11 +185,19 @@ if mode == "v4":
     advanced.close()
     ledger = sqlite3.connect(advanced.path)
     written["spend"] = [list(row) for row in ledger.execute("SELECT interruption_id, at FROM spend ORDER BY spend_id")]
+    written["ledger_schema"] = ledger.execute("PRAGMA user_version").fetchone()[0]
     ledger.close()
+if mode == "v5 homes":
+    # A record of a further Codex home, as its engine registers it: the key the home is known by, from its path.
+    from codex_auto_resume import homes
+    other = homes.key(home / "second-codex-home")
+    make("other home", 9, state="recovered", reason="progress_observed", home=other)
+    written["home_key"] = other
 store.close()
 with Store(paths.state_dir, check=True) as checked:     # every row is one the product's own validator takes
     written["schema"] = checked.schema_version()
     written["count"] = len(checked.all_records())
+    written["home_keys"] = sorted({row.get("home_key", "") for row in checked.all_records()})
 print(json.dumps(written))
 '''
 
@@ -198,6 +215,23 @@ def tagged() -> bool:
                    .returncode == 0 for tag in (SCHEMA_3, SCHEMA_4))
     except (OSError, subprocess.SubprocessError):
         return False
+
+
+def schema_5_ref():
+    """The first of SCHEMA_5_REFS the product's repository has, as a tag or a branch; None when it has neither."""
+    if not tagged():
+        return None
+    for ref in SCHEMA_5_REFS:
+        for full in ("refs/tags/%s" % ref, "refs/heads/%s" % ref):
+            try:
+                if run([GIT, "-C", str(PRODUCT), "rev-parse", "--verify", "-q", full + "^{commit}"]).returncode == 0:
+                    return full
+            except (OSError, subprocess.SubprocessError):
+                return None
+    return None
+
+
+SCHEMA_5 = schema_5_ref()
 
 
 def extract(tag, paths, into: pathlib.Path) -> pathlib.Path:
@@ -238,6 +272,10 @@ class ProductStateTests(unittest.TestCase):
         cls.pruned_at = cls.base + 92 * 86400
         shutil.copytree(root / "v4", root / "pruned")
         cls.made["pruned"] = cls.child(trees[SCHEMA_4], root / "pruned", "prune", base=cls.pruned_at)
+        if SCHEMA_5:
+            tree = extract(SCHEMA_5, ["src/codex_auto_resume", "advanced/src"], root / "v5-tree")
+            for name in ("v5", "v5 homes"):
+                cls.made[name] = cls.child(tree, root / name, name)
 
     @classmethod
     def child(cls, tree, home, mode, base=None):
@@ -360,8 +398,47 @@ class ProductStateTests(unittest.TestCase):
                 reports[made] = dict(report, recorded_at=None)
         self.assertEqual(reports["v3"], reports["migrated"])
 
+    @unittest.skipUnless(SCHEMA_5, "schema 5's release, or its branch, is not in the product's repository")
+    def test_schema_5_and_ledger_4_read_as_their_v0_6_11_twins(self):
+        """v0.6.15-beta's store and edition make the same records as v0.6.11's, every one the default home's
+        (home_key ''), and the spend ledger of version 4: the report is v0.6.11's, of schema 4 and ledger 2."""
+        self.assertEqual((self.made["v5"]["schema"], self.made["v5"]["count"], self.made["v5"]["ledger_schema"]),
+                         (5, 8, 4))
+        self.assertEqual(self.made["v5"]["home_keys"], [""])
+        self.assertEqual(self.made["v4"]["spend"], self.made["v5"]["spend"])
+        reports = {}
+        for made in ("v4", "v5"):
+            with self.subTest(made):
+                report, notes, status = self.report(made)
+                self.assertEqual((notes["hidden"], notes["routed"], notes["route_unknown"]), (1, 4, 0))
+                reports[made] = (dict(report, recorded_at=None), notes, status["records"], status["lines"])
+        self.assertEqual(reports["v4"], reports["v5"])
+
+    @unittest.skipUnless(SCHEMA_5, "schema 5's release, or its branch, is not in the product's repository")
+    def test_a_record_of_another_codex_home_counts_and_its_home_is_never_said(self):
+        """The record v0.6.15-beta's store keeps for a further Codex home is counted as the default home's are
+        (HOMES), and the receiving side counts it so; nothing the reporter writes or says carries its key."""
+        made = self.made["v5 homes"]
+        self.assertEqual((made["schema"], made["count"], made["home_keys"]), (5, 9, sorted(["", made["home_key"]])))
+        report, notes, status = self.report("v5 homes")
+        self.assertEqual([entry["state"] for entry in report["records"]],
+                         ["recovered", "recovery_turn_failed", "recovered", "recovered"])
+        self.assertIsNone(report["records"][-1]["progress_items"])
+        self.assertEqual((notes["hidden"], notes["routed"], notes["route_unknown"]), (1, 4, 0))
+        exact = report["capabilities"]["exact_thread_recovery"]
+        self.assertEqual((exact["confirmed"], exact["missed"], exact["level"]), (4, 0, "VERIFIED"))
+        self.assertEqual(status["records"]["total"], 4)
+        raw = reporter.encode(report)
+        reader = load_product_reader()
+        _parsed, problems, _recomputed = reader.inspect(raw, author=LOGIN, releases=None)
+        self.assertEqual(problems, [])
+        for text in (raw.decode("ascii"), json.dumps(status), json.dumps(notes)):
+            self.assertNotIn(made["home_key"], text)
+            self.assertNotIn("home_key", text)
+            self.assertNotIn("second-codex-home", text)
+
     def test_a_schema_it_does_not_know_is_refused_on_the_products_own_file(self):
-        for version, said in ((5, r"newer Codex Auto Resume than this reporter knows \(schema 5\)\. "
+        for version, said in ((6, r"newer Codex Auto Resume than this reporter knows \(schema 6\)\. "
                                   r"Update codex-compat-reporter\."),
                               (2, r"has schema 2; this reporter needs Codex Auto Resume v0\.6\.0 or newer")):
             with self.subTest(version):
@@ -372,7 +449,7 @@ class ProductStateTests(unittest.TestCase):
     def test_a_ledger_schema_it_does_not_know_is_refused_on_the_products_own_ledger(self):
         with reporter.readonly(self.root / "v4" / "config" / "advanced" / "advanced.sqlite") as ledger:
             self.assertIn(ledger.execute("PRAGMA user_version").fetchone()[0], reporter.LEDGER_SCHEMAS)
-        for version, said in ((4, r"newer Codex Auto Resume than this reporter knows \(ledger schema 4\)\. "
+        for version, said in ((5, r"newer Codex Auto Resume than this reporter knows \(ledger schema 5\)\. "
                                   r"Update codex-compat-reporter\."),
                               (0, r"has ledger schema 0, which no Codex Auto Resume this reporter knows writes")):
             with self.subTest(version):
