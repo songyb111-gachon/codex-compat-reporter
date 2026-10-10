@@ -129,7 +129,8 @@ cd codex-compat-reporter
   모드(`-I`)로 실행하므로, 두 폴더 어디에서도 모듈을 가져오지 않습니다.
 - `Report.exe`에는 .NET Framework 4.8. Windows 10과 11에는 모두 들어 있습니다.
 - 설치된 Codex Auto Resume v0.6.0 이상. 감시기가 한 번 이상 돌았어야 합니다. v0.6.0부터
-  v0.6.11-alpha까지의 상태 데이터베이스(스키마 3)와 v0.6.11-beta 이후의 것(스키마 4)을 읽습니다.
+  v0.6.11-alpha까지의 상태 데이터베이스(스키마 3), v0.6.11-beta부터 v0.6.14까지의 것(스키마 4),
+  v0.6.15-beta 이후의 것(스키마 5)을 읽습니다.
   이 도구가 아는 것보다 새 Codex Auto Resume이 쓴 상태나 고급판 사용 원장은 짐작해서 읽지 않습니다.
   `status`는 읽을 수 없다고 말하고, `report`는 거절하면서 codex-compat-reporter를 업데이트하라고
   안내합니다.
@@ -193,11 +194,11 @@ python codex_compat_report.py submit <그 파일> --yes              # PR 열기
 | 읽는 것 | 쓰임 |
 | --- | --- |
 | `.codex-auto-resume\app\.codex-plugin\plugin.json` | 설치된 제품 버전 |
-| `.codex-auto-resume\config\state.sqlite` | 복구 기록: 언제 감지하고 언제 넣었고 어떻게 끝났는지, 범주·상태·이유, 통과한 게이트, 아래 개수를 세는 데 쓰는 스레드·턴 식별자, 그리고 다른 경로로 보낸 기록을 알아보는 데 쓰는 중단 식별자·클라이언트 ID·청구 시각(아래 참고). 기록 지우기로 숨긴 기록은 빼고 읽습니다. |
+| `.codex-auto-resume\config\state.sqlite` | 복구 기록: 언제 감지하고 언제 넣었고 어떻게 끝났는지, 범주·상태·이유, 통과한 게이트, 아래 개수를 세는 데 쓰는 스레드·턴 식별자, 그리고 다른 경로로 보낸 기록을 알아보는 데 쓰는 중단 식별자·클라이언트 ID·청구 시각(아래 참고). 스키마 5부터는 기록이 감시기가 함께 감시하는 다른 Codex 홈의 것인지도 읽습니다. 그 턴의 항목 개수를 이 홈의 대화 기록에서 세지 않기 위해서일 뿐이며, 다른 홈의 기록도 다른 기록과 똑같이 셉니다. 보고서는 기록이 어느 홈의 것이었는지도, 홈이 여럿이라는 것도 말하지 않습니다. 기록 지우기로 숨긴 기록은 빼고 읽습니다. |
 | `.codex-auto-resume\config\advanced\advanced.sqlite` | 고급판이 이 파일을 둔 곳에서만: 사용 원장(spend ledger)의 중단 식별자와 시각. 고급 기능이 값을 치른 전송이 어느 것인지 알려 줍니다. 그리고 원장의 스키마와, 원장이 지금 가진 단위 수와 지금까지 받은 단위 수. 원장이 어디까지 거슬러 올라가 알려 줄 수 있는지 알려 줍니다. |
 | `.codex-auto-resume\logs\auto-resume.log`와 `auto-resume.log.1`~`.5` | 각 기록 앞뒤로 어떤 Codex 버전이 돌고 있었는지, 그 버전에서 제품 자체 점검이 통과했는지 |
 | `.codex-auto-resume\config\compatibility.json` | 감시기가 지금 설치된 Codex에 대해 스스로 내린 판단 |
-| `.codex\thread_history_*.sqlite` (가장 새 것) | 복구된 턴이 만들어 낸 항목이 종류별로 몇 개인지 |
+| `.codex\thread_history_*.sqlite` (가장 새 것) | 복구된 턴이 만들어 낸 항목이 종류별로 몇 개인지. 다른 Codex 홈의 대화 기록은 읽지 않으므로, 그 홈의 기록에는 개수가 없습니다. |
 
 보고서는 표준 경로에 대한 것입니다. 이어서 하기 메시지를 `codex queue`로 보내고, 그 끝에 붙인 마커를
 제품이 Codex 기록에서 찾아 도착을 증명하는 경로입니다. 고급판에는 사람이 켜면 자기 경로로 대화를 잇는

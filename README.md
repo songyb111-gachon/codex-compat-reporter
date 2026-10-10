@@ -135,7 +135,8 @@ It needs:
   They start Python isolated (`-I`), so no module is taken from either folder.
 - For `Report.exe`: .NET Framework 4.8, which is part of every Windows 10 and 11.
 - Codex Auto Resume v0.6.0 or newer, installed, with its watcher having run at least once. It reads
-  the state database of v0.6.0 to v0.6.11-alpha (schema 3) and of v0.6.11-beta and later (schema 4).
+  the state database of v0.6.0 to v0.6.11-alpha (schema 3), of v0.6.11-beta to v0.6.14 (schema 4) and
+  of v0.6.15-beta and later (schema 5).
   A state, or an advanced-edition spend ledger, written by a newer Codex Auto Resume than it knows
   is never guessed at: `status` says it cannot be read, and `report` refuses and asks you to update
   codex-compat-reporter.
@@ -200,11 +201,11 @@ Codex home is `%USERPROFILE%\.codex` unless `CODEX_HOME` does.
 | It reads | For |
 | --- | --- |
 | `.codex-auto-resume\app\.codex-plugin\plugin.json` | the installed product version |
-| `.codex-auto-resume\config\state.sqlite` | the recovery records: when each was detected, delivered and how it ended, its category, state and reason, which gates it passed, the thread and turn ids that key the count below, and the interruption id, client id and claim time that tell a record another route sent (below). Records hidden with Clear history are left out. |
+| `.codex-auto-resume\config\state.sqlite` | the recovery records: when each was detected, delivered and how it ended, its category, state and reason, which gates it passed, the thread and turn ids that key the count below, and the interruption id, client id and claim time that tell a record another route sent (below). From schema 5, also whether a record is of a further Codex home the watcher watches - only so that its turns are not counted from this home's history; a record of another home is counted like any other, and the report never says which home it was of, or that there is more than one. Records hidden with Clear history are left out. |
 | `.codex-auto-resume\config\advanced\advanced.sqlite` | only where the advanced edition keeps it: its spend ledger's interruption ids and times, which name the sends an advanced feature paid for, its schema, and how many units it holds and was ever given, which say how far back it can tell |
 | `.codex-auto-resume\logs\auto-resume.log` and `auto-resume.log.1` to `.5` | which Codex version was running around each record, and whether the product's own checks passed on it |
 | `.codex-auto-resume\config\compatibility.json` | what the watcher itself concluded about the Codex installed now |
-| `.codex\thread_history_*.sqlite` (the newest) | how many items of each kind the recovered turn produced |
+| `.codex\thread_history_*.sqlite` (the newest) | how many items of each kind the recovered turn produced. A further Codex home's history is not read, so its records carry no count. |
 
 A report is about the standard route: a continuation sent with `codex queue`, carrying a marker the
 product finds in Codex's history to prove it arrived. The advanced edition has features that, once
