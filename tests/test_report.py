@@ -773,8 +773,8 @@ class RouteTests(unittest.TestCase):
         self.assertEqual((len(report["records"]), notes["routed"]), (2, 3))
 
     def test_a_unit_the_spend_ledger_paid_at_its_last_claim_leaves_it_out(self):
-        self.assertEqual(reporter.LEDGER_SCHEMAS, (1, 2, 3, 4))
-        # v0.6.11-alpha's ledger, v0.6.11-beta.2's on, v0.6.14-beta's on, v0.6.15-beta's on
+        self.assertEqual(reporter.LEDGER_SCHEMAS, (1, 2, 3, 4, 5))
+        # v0.6.11-alpha's ledger, v0.6.11-beta.2's on, v0.6.14-beta's on, v0.6.15-beta's on, v0.6.16-beta.3's on
         for version in reporter.LEDGER_SCHEMAS:
             with self.subTest(version):
                 report, notes, _out = self.outcome([self.other(1), self.other(2), self.other(3)], spends=[
@@ -783,6 +783,33 @@ class RouteTests(unittest.TestCase):
                     ("9" * 64, NOW - 1800)],         # another record's
                     ledger_version=version)
                 self.assertEqual((len(report["records"]), notes["routed"]), (3, 1))
+
+    def test_the_tables_of_ledger_5_are_never_read_and_never_said(self):
+        """Version 5 (v0.6.16-beta.3) adds the usage meter's table and widens `options` and `continuations`; the
+        spend table is as it was, and nothing else of the file is read: a meter row, a choice and a wrap-up
+        beside the units change no count and appear in nothing the reporter writes or says."""
+        rows = [self.other(1), self.other(2), self.other(3)]
+        notes = {}
+        with Installation([record()] + rows, columns=SCHEMA_4_COLUMNS, user_version=4) as installation:
+            path = spend_ledger(installation.home, [("1" * 64, NOW - 1800)], user_version=5)
+            database = sqlite3.connect(path)
+            database.execute("CREATE TABLE meter (bucket TEXT, minutes INTEGER, used_percent REAL, reset_at INTEGER, "
+                             "read_at REAL, warned_reset_at INTEGER, warned_at REAL, paused_reset_at INTEGER)")
+            database.execute("INSERT INTO meter VALUES ('codex', 300, 91.5, 1770000000, 1769999000.5, 1770000000, "
+                             "1769999000.5, NULL)")
+            database.execute("CREATE TABLE options (capability TEXT, choice TEXT, value TEXT)")
+            database.execute("INSERT INTO options VALUES ('usage_wrap_up', 'wrap_style', 'short')")
+            database.execute("CREATE TABLE continuations (answer_id TEXT, capability TEXT, kind TEXT, thread_id TEXT)")
+            database.execute("INSERT INTO continuations VALUES ('f' || hex(randomblob(31)), 'usage_wrap_up', "
+                             "'wrap_up', ?)", (THREAD,))
+            database.commit()
+            database.close()
+            report = reporter.build(LOGIN, notes=notes)
+            _code, out, _err = run_main("status")
+        self.assertEqual((len(report["records"]), notes["routed"], notes["route_unknown"]), (3, 1, 0))
+        for text in (reporter.encode(report).decode("ascii"), out, json.dumps(notes)):
+            for word in ("meter", "used_percent", "wrap", "91.5", "usage_wrap_up"):
+                self.assertNotIn(word, text)
 
     def test_a_record_claimed_before_the_ledger_reaches_back_is_left_out_and_said(self):
         """Its unit may be one the ledger pruned (LEDGER REACH): it is left out, counted and said."""
@@ -840,7 +867,7 @@ class RouteTests(unittest.TestCase):
                 ("no interruption ids", ("spend_id", "at", "capability", "thread_id"), 2,
                  "does not hold the spend ledger.*Update codex-compat-reporter"),
                 # A newer ledger, even with the same columns, could keep its units otherwise.
-                ("a newer ledger", every, 5, r"newer Codex Auto Resume than this reporter knows \(ledger schema 5\)\. "
+                ("a newer ledger", every, 6, r"newer Codex Auto Resume than this reporter knows \(ledger schema 6\)\. "
                                              r"Update codex-compat-reporter\."),
                 ("no ledger schema", every, 0, "has ledger schema 0, which no Codex Auto Resume this reporter knows")):
             with self.subTest(name):
