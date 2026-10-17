@@ -3,8 +3,9 @@
 The other tests build the product's state by hand, in the columns the reporter reads. These have the
 product make it, from its own tags: schema 3 by v0.6.10's store, schema 4 by v0.6.11's - fresh, and
 migrated from v0.6.10's - and schema 5, with the advanced edition's file of version 4, by v0.6.15-beta's (its
-branch until that tag is made) and, with the file of version 5, by v0.6.16-beta.3's - both fresh, and the
-version-4 file brought to version 5 by the product's own opening of it - with every record registered and claimed by that store and then carried to
+branch until that tag is made) and, with the file of version 5, by v0.6.16-beta.3's, and with the file of version 7
+(6 is its step on the way), by v0.6.16-beta.4's - each fresh, and the older file brought to the newer version by the
+product's own opening of it - with every record registered and claimed by that store and then carried to
 where it ends in the store's own columns, as the engine's watch would carry it; and, at v0.6.11, the
 advanced edition's own claim ledger paying for the sends its goal continuation carries, and pruning
 those units 90 days on, as its watcher would. The reporter
@@ -57,6 +58,9 @@ SCHEMA_5_REFS = ("v0.6.15-beta", "v0614-beta2")
 # The advanced file of version 5 (the usage meter's table), v0.6.16-beta.3's. A later ledger version is added the
 # same way: its first release here, a tree of it in setUpClass, and a twin test beside the ones for version 5.
 LEDGER_5_REFS = ("v0.6.16-beta.3",)
+# The advanced file of version 7 (version 6, the wrap-up's wordings, is the step on the way to it; no release
+# writes 6 and stops there): v0.6.16-beta.4's. Its table of wordings, headless_runs and chat_messages are the new ones.
+LEDGER_7_REFS = ("v0.6.16-beta.4",)
 VERSION = "codex-cli 0.158.0"
 LOGIN = "someone"
 
@@ -77,14 +81,32 @@ if mode == "migrate":
     with Store(paths.state_dir, migrate=True) as store:
         print(json.dumps({"schema": store.schema_version(), "count": len(store.all_records())}))
     raise SystemExit(0)
-if mode == "upgrade":
-    # A file of version 4 opened by a build that writes version 5: the product's own migration (state/schema.py
-    # UPGRADE_FROM_4), after which the meter has a reading in it as the usage meter would have saved one.
+
+
+def extras(advanced, base):
+    """What v0.6.16-beta.4 adds that the reporter does not read, as its own methods write it: a person's own wrap-up
+    wording (version 6), a turn run here and a Dashboard chat message (version 7)."""
+    with advanced._transaction() as connection:
+        generation = connection.execute("SELECT generation FROM meta").fetchone()[0]
+    advanced.set_wording("usage_wrap_up", "wrap_custom_five_hour", "Please wrap up, the budget is low.",
+                         generation=generation, actor="dashboard", at=base)
+    thread = "0a1b2c3d-%04x-7000-8000-%012x" % (9, 9)
+    advanced.run_started(hashlib.sha256(b"a run").hexdigest(), "headless_run", thread,
+                         started_at=base, ends_by=base + 600)
+    advanced.add_chat(thread, "Is the build green?", hashlib.sha256(b"a chat").hexdigest(), at=base)
+
+
+if mode in ("upgrade", "upgrade 7"):
+    # A file of an older version opened by a build that writes a newer one: the product's own migration (state/schema.py
+    # UPGRADE_FROM_4, then FROM_5 and the stage-4 step where the build has them), after which the meter has a reading
+    # in it as the usage meter would have saved one, and, with "upgrade 7", the new tables a row each.
     from codex_auto_resume_advanced.state import AdvancedState
 
     advanced = AdvancedState(paths)
     advanced.save_meter([{"bucket": "codex", "window_minutes": 300, "used_percent": 91.5, "reset_at": int(base) + 3600}],
                         at=base)
+    if mode == "upgrade 7":
+        extras(advanced, base)
     advanced.close()
     ledger = sqlite3.connect(advanced.path)
     print(json.dumps({"ledger_schema": ledger.execute("PRAGMA user_version").fetchone()[0],
@@ -169,7 +191,7 @@ def make(name, number, *, state, reason, delivered=True, ledger=None, carried=()
 make("worked", 1, state="recovered", reason="progress_observed")
 make("failed", 2, state="recovery_turn_failed", reason="turn_failed", turn_status="failed")
 make("hidden", 3, state="recovered", reason="progress_observed", hidden=True)
-if mode in ("v4", "v5", "v5 homes", "v5 meter"):
+if mode in ("v4", "v5", "v5 homes", "v5 meter", "v7"):
     assert SCHEMA_VERSION == (4 if mode == "v4" else 5)
     from codex_auto_resume.domain import ids
     from codex_auto_resume.domain.plug import Plug, Point
@@ -203,12 +225,16 @@ if mode in ("v4", "v5", "v5 homes", "v5 meter"):
     make("goal channel", 7, state="recovered", reason="progress_observed", ledger=paying, carried={Point.SENDER})
     make("paid then standard", 8, state="recovered", reason="progress_observed", ledger=paying,
          carried={Point.UNLOADED}, claims=2)
-    if mode == "v5 meter":
+    if mode in ("v5 meter", "v7"):
         advanced.save_meter([{"bucket": "codex", "window_minutes": 300, "used_percent": 91.5,
                               "reset_at": int(base) + 3600}], at=base)
+    if mode == "v7":
+        extras(advanced, base)
     advanced.close()
     ledger = sqlite3.connect(advanced.path)
-    written["meter"] = ledger.execute("SELECT count(*) FROM meter").fetchone()[0] if mode == "v5 meter" else None
+    written["meter"] = ledger.execute("SELECT count(*) FROM meter").fetchone()[0] if mode in ("v5 meter", "v7") else None
+    written["extras"] = [ledger.execute("SELECT count(*) FROM " + name).fetchone()[0]
+                         for name in ("wordings", "headless_runs", "chat_messages")] if mode == "v7" else None
     written["spend"] = [list(row) for row in ledger.execute("SELECT interruption_id, at FROM spend ORDER BY spend_id")]
     written["ledger_schema"] = ledger.execute("PRAGMA user_version").fetchone()[0]
     ledger.close()
@@ -275,6 +301,22 @@ def ledger_5_ref():
 LEDGER_5 = ledger_5_ref()
 
 
+def ledger_7_ref():
+    """The first of LEDGER_7_REFS the product's repository has as a tag; None when it has none."""
+    if not tagged():
+        return None
+    for ref in LEDGER_7_REFS:
+        try:
+            if run([GIT, "-C", str(PRODUCT), "rev-parse", "--verify", "-q", "refs/tags/%s^{commit}" % ref]).returncode == 0:
+                return "refs/tags/" + ref
+        except (OSError, subprocess.SubprocessError):
+            return None
+    return None
+
+
+LEDGER_7 = ledger_7_ref()
+
+
 def extract(tag, paths, into: pathlib.Path) -> pathlib.Path:
     """The tag's own files under `paths`, as `git archive` gives them, in a folder of their own."""
     done = run([GIT, "-C", str(PRODUCT), "archive", "--format=tar", tag, *paths])
@@ -326,6 +368,18 @@ class ProductStateTests(unittest.TestCase):
             # v0.6.16-beta.3's own pruning, 92 days on, of the ledger it made.
             shutil.copytree(root / "v5 meter", root / "v5 pruned")
             cls.made["v5 pruned"] = cls.child(tree, root / "v5 pruned", "prune", base=cls.pruned_at)
+        if LEDGER_7 and LEDGER_5 and SCHEMA_5:
+            tree = extract(LEDGER_7, ["src/codex_auto_resume", "advanced/src"], root / "v7-tree")
+            cls.made["v7"] = cls.child(tree, root / "v7", "v7")
+            # The version-5 file v0.6.16-beta.3 made, opened by v0.6.16-beta.4: brought to version 7 in place
+            # (UPGRADE_FROM_5, then the stage-4 step); and the version-4 file of v0.6.15-beta, through all three.
+            shutil.copytree(root / "v5 meter", root / "v7 upgraded")
+            cls.made["v7 upgraded"] = cls.child(tree, root / "v7 upgraded", "upgrade 7")
+            shutil.copytree(root / "v5", root / "v7 from 4")
+            cls.made["v7 from 4"] = cls.child(tree, root / "v7 from 4", "upgrade")
+            # v0.6.16-beta.4's own pruning, 92 days on, of the ledger it made.
+            shutil.copytree(root / "v7", root / "v7 pruned")
+            cls.made["v7 pruned"] = cls.child(tree, root / "v7 pruned", "prune", base=cls.pruned_at)
 
     @classmethod
     def child(cls, tree, home, mode, base=None):
@@ -533,6 +587,59 @@ class ProductStateTests(unittest.TestCase):
         self.assertEqual((len(report["records"]), notes["hidden"], notes["routed"], notes["route_unknown"]),
                          (0, 1, 3, 4))
 
+    @unittest.skipUnless(LEDGER_7 and LEDGER_5 and SCHEMA_5, "ledger 7's release is not in the product's repository")
+    def test_ledger_7_with_wordings_runs_and_chat_reads_as_ledger_4_did(self):
+        """v0.6.16-beta.4 makes the advanced file of version 7: version 6 widens `options` and `continuations` again
+        and adds the wordings' table, version 7 adds headless_runs and chat_messages, and the spend table is the
+        same. The report is the version-4 file's, and says nothing of any of them."""
+        made = self.made["v7"]
+        self.assertEqual((made["schema"], made["count"], made["ledger_schema"], made["meter"]), (5, 8, 7, 1))
+        self.assertEqual(made["extras"], [1, 1, 1])
+        self.assertEqual(made["home_keys"], [""])
+        self.assertEqual(self.made["v5"]["spend"], made["spend"])
+        reports = {}
+        for name in ("v5", "v7"):
+            with self.subTest(name):
+                report, notes, status = self.report(name)
+                self.assertEqual((notes["hidden"], notes["routed"], notes["route_unknown"]), (1, 4, 0))
+                reports[name] = (dict(report, recorded_at=None), notes, status["records"], status["lines"])
+        self.assertEqual(reports["v5"], reports["v7"])
+        report, _notes, status = self.report("v7")
+        raw = reporter.encode(report)
+        self.assertEqual(reporter.validate(raw)[1], [])
+        _parsed, problems, _recomputed = load_product_reader().inspect(raw, author=LOGIN, releases=None)
+        self.assertEqual(problems, [])
+        shown = raw.decode("ascii") + json.dumps(status)
+        for word in ("meter", "used_percent", "91.5", "wrap_up", "budget is low", "Is the build green", "headless",
+                     "chat", "wording"):
+            self.assertNotIn(word, shown)
+
+    @unittest.skipUnless(LEDGER_7 and LEDGER_5 and SCHEMA_5, "ledger 7's release is not in the product's repository")
+    def test_files_of_version_5_and_4_opened_by_v0_6_16_beta_4_keep_every_unit_and_read_the_same(self):
+        """The product's own migration (UPGRADE_FROM_5 and the stage-4 step; from 4, UPGRADE_FROM_4 first) remakes
+        two tables, adds three, and keeps the spend ledger's rows and ids as they were."""
+        upgraded = self.made["v7 upgraded"]
+        self.assertEqual((upgraded["ledger_schema"], upgraded["meter"]), (7, 1))
+        for table in ("meter", "wordings", "headless_runs", "chat_messages"):
+            self.assertIn(table, upgraded["tables"])
+        self.assertEqual(self.made["v7 from 4"]["ledger_schema"], 7)
+        for name in ("v7 upgraded", "v7 from 4"):
+            with self.subTest(name):
+                self.assertEqual(self.made[name]["spend"], self.made["v5"]["spend"])
+                before, after = self.report("v5")[:2], self.report(name)[:2]
+                self.assertEqual((dict(before[0], recorded_at=None), before[1]),
+                                 (dict(after[0], recorded_at=None), after[1]))
+                self.assertEqual(after[1]["routed"], 4)
+
+    @unittest.skipUnless(LEDGER_7 and LEDGER_5 and SCHEMA_5, "ledger 7's release is not in the product's repository")
+    def test_v0_6_16_beta_4s_own_pruning_leaves_the_same_reach(self):
+        """Its pruning pass, 92 days on, takes both units as v0.6.11's did (LEDGER REACH), the rows of its new tables
+        stay where they are, and the records claimed then are left out as route unknown."""
+        self.assertEqual(self.made["v7 pruned"], {"units": 0, "given": 2})
+        report, notes, _status = self.report("v7 pruned", at=self.pruned_at)
+        self.assertEqual((len(report["records"]), notes["hidden"], notes["routed"], notes["route_unknown"]),
+                         (0, 1, 3, 4))
+
     def test_a_schema_it_does_not_know_is_refused_on_the_products_own_file(self):
         for version, said in ((6, r"newer Codex Auto Resume than this reporter knows \(schema 6\)\. "
                                   r"Update codex-compat-reporter\."),
@@ -545,7 +652,7 @@ class ProductStateTests(unittest.TestCase):
     def test_a_ledger_schema_it_does_not_know_is_refused_on_the_products_own_ledger(self):
         with reporter.readonly(self.root / "v4" / "config" / "advanced" / "advanced.sqlite") as ledger:
             self.assertIn(ledger.execute("PRAGMA user_version").fetchone()[0], reporter.LEDGER_SCHEMAS)
-        for version, said in ((6, r"newer Codex Auto Resume than this reporter knows \(ledger schema 6\)\. "
+        for version, said in ((8, r"newer Codex Auto Resume than this reporter knows \(ledger schema 8\)\. "
                                   r"Update codex-compat-reporter\."),
                               (0, r"has ledger schema 0, which no Codex Auto Resume this reporter knows writes")):
             with self.subTest(version):

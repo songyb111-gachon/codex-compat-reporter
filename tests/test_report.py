@@ -773,8 +773,9 @@ class RouteTests(unittest.TestCase):
         self.assertEqual((len(report["records"]), notes["routed"]), (2, 3))
 
     def test_a_unit_the_spend_ledger_paid_at_its_last_claim_leaves_it_out(self):
-        self.assertEqual(reporter.LEDGER_SCHEMAS, (1, 2, 3, 4, 5))
-        # v0.6.11-alpha's ledger, v0.6.11-beta.2's on, v0.6.14-beta's on, v0.6.15-beta's on, v0.6.16-beta.3's on
+        self.assertEqual(reporter.LEDGER_SCHEMAS, (1, 2, 3, 4, 5, 6, 7))
+        # v0.6.11-alpha's ledger, v0.6.11-beta.2's on, v0.6.14-beta's on, v0.6.15-beta's on, v0.6.16-beta.3's on,
+        # v0.6.16-beta.4's on (6 is its step on the way to 7)
         for version in reporter.LEDGER_SCHEMAS:
             with self.subTest(version):
                 report, notes, _out = self.outcome([self.other(1), self.other(2), self.other(3)], spends=[
@@ -810,6 +811,37 @@ class RouteTests(unittest.TestCase):
         for text in (reporter.encode(report).decode("ascii"), out, json.dumps(notes)):
             for word in ("meter", "used_percent", "wrap", "91.5", "usage_wrap_up"):
                 self.assertNotIn(word, text)
+
+    def test_the_tables_of_ledgers_6_and_7_are_never_read_and_never_said(self):
+        """Version 6 (v0.6.16-beta.4) adds a person's own wrap-up wording, version 7 the turns run here and the
+        Dashboard's chat; the spend table is as it was, and nothing else of the file is read: a wording, a run and
+        a chat message beside the units change no count and appear in nothing the reporter writes or says."""
+        rows = [self.other(1), self.other(2), self.other(3)]
+        for version in (6, 7):
+            with self.subTest(version):
+                notes = {}
+                with Installation([record()] + rows, columns=SCHEMA_4_COLUMNS, user_version=4) as installation:
+                    path = spend_ledger(installation.home, [("1" * 64, NOW - 1800)], user_version=version)
+                    database = sqlite3.connect(path)
+                    database.execute("CREATE TABLE wordings (capability TEXT, choice TEXT, words TEXT, changed_at REAL)")
+                    database.execute("INSERT INTO wordings VALUES ('usage_wrap_up', 'wrap_custom_five_hour', "
+                                     "'budget is low, wrap up', 1769999000.5)")
+                    database.execute("CREATE TABLE headless_runs (interruption_id TEXT, capability TEXT, "
+                                     "thread_id TEXT, started_at REAL, ends_by REAL, end TEXT, restore_model TEXT)")
+                    database.execute("INSERT INTO headless_runs VALUES (?, 'model_fallback', ?, 1, 2, NULL, 'gpt-x')",
+                                     ("2" * 64, THREAD))
+                    database.execute("CREATE TABLE chat_messages (chat_id INTEGER, thread_id TEXT, words TEXT, "
+                                     "state TEXT)")
+                    database.execute("INSERT INTO chat_messages VALUES (1, ?, 'is the build green', 'waiting')",
+                                     (THREAD,))
+                    database.commit()
+                    database.close()
+                    report = reporter.build(LOGIN, notes=notes)
+                    _code, out, _err = run_main("status")
+                self.assertEqual((len(report["records"]), notes["routed"], notes["route_unknown"]), (3, 1, 0))
+                for text in (reporter.encode(report).decode("ascii"), out, json.dumps(notes)):
+                    for word in ("wording", "budget is low", "headless", "gpt-x", "is the build green", "chat_messages"):
+                        self.assertNotIn(word, text)
 
     def test_a_record_claimed_before_the_ledger_reaches_back_is_left_out_and_said(self):
         """Its unit may be one the ledger pruned (LEDGER REACH): it is left out, counted and said."""
@@ -867,7 +899,7 @@ class RouteTests(unittest.TestCase):
                 ("no interruption ids", ("spend_id", "at", "capability", "thread_id"), 2,
                  "does not hold the spend ledger.*Update codex-compat-reporter"),
                 # A newer ledger, even with the same columns, could keep its units otherwise.
-                ("a newer ledger", every, 6, r"newer Codex Auto Resume than this reporter knows \(ledger schema 6\)\. "
+                ("a newer ledger", every, 8, r"newer Codex Auto Resume than this reporter knows \(ledger schema 8\)\. "
                                              r"Update codex-compat-reporter\."),
                 ("no ledger schema", every, 0, "has ledger schema 0, which no Codex Auto Resume this reporter knows")):
             with self.subTest(name):

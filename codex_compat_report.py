@@ -259,28 +259,33 @@ PLUG_WORDS = frozenset({"plugged", "held"})       # gate words only the edition'
 SPEND = ("interruption_id", "at")                 # the spend ledger's columns read, and nothing else
 # The spend ledger's user_versions this reporter reads, and no others: 1, written by v0.6.11-alpha and -beta,
 # 2, from v0.6.11-beta.2 (advanced state/schema.py SCHEMA_VERSION, the same through v0.6.12-alpha.2), 3, from
-# v0.6.14-beta, 4, from v0.6.15-beta, and 5, from v0.6.16-beta.3. Version 2 added arming.warnings, version 3 the
+# v0.6.14-beta, 4, from v0.6.15-beta, 5, from v0.6.16-beta.3, and 6 and 7, from v0.6.16-beta.4. Version 2 added arming.warnings, version 3 the
 # reset actions' tables (state/schema.py _STATEMENTS_V3, RESET_TABLES), version 4 the continuations, keep_going and
 # prompts tables and records.queue_id and withdraw (_STATEMENTS_V4, UPGRADE_FROM_3), and version 5 the meter table
 # (the usage meter's last reading of each window), the `options` and `continuations` tables made again with wider
 # CHECK lists - the usage_meter, usage_wrap_up and usage_pause capabilities' choices, and the wrap-up's continuation
-# words (V5_OPTION_WORDS, V5_CONTINUATION_WORDS, UPGRADE_FROM_4) - and each left the spend table as it was:
+# words (V5_OPTION_WORDS, V5_CONTINUATION_WORDS, UPGRADE_FROM_4), version 6 the wordings table (a person's own wrap-up
+# text) and `options` and `continuations` made again with wider lists (V6_OPTION_WORDS, V6_CONTINUATION_WORDS,
+# UPGRADE_FROM_5), and version 7 the headless_runs and chat_messages tables, added with nothing remade
+# (UPGRADE_TO_STAGE4) - and each left the spend table as it was:
 # TABLES["spend"] is still (spend_id, at, capability, thread_id, interruption_id), AUTOINCREMENT, paid by the
 # same state record_spend inside the claim (ledger.py ClaimLedger.claim - its new queue-for-open answer pays
 # with it too, at that claim's time, so a record it queued is left out as another route's like any paid one),
-# and pruned by the same journal.py _prune_spend (90 days, 5,000 units). None of version 4's or 5's tables is read:
-# they hold the edition's own records, which are never core's interruptions - a wrap-up the usage meter has sent
-# is such a record (plughands.RecordPurpose.WRAP_UP, a row of its `records` table) and no row of core's, and the
-# core state is still schema 5 (store/schema.py SCHEMA_VERSION, v0.6.16-beta.3 changed none of its columns, gates
-# or states), so SCHEMAS is as it was. A newer ledger is refused, as a newer state is: it could keep its units
+# and pruned by the same journal.py _prune_spend (90 days, 5,000 units; v0.6.16-beta.4 changed journal.py's WATCH_LIMIT
+# alone). None of version 4's to 7's tables is read: they hold the edition's own records, which are never core's
+# interruptions - a wrap-up the usage meter has sent is such a record (plughands.RecordPurpose.WRAP_UP, a row of its
+# `records` table) and no row of core's, a turn run here is a row of headless_runs and a Dashboard chat message one of
+# chat_messages, and the core state is still schema 5 (store/schema.py SCHEMA_VERSION; v0.6.16-beta.3 and beta.4
+# changed none of its columns, gates or states - beta.4 added a cancel_waiting action only), so SCHEMAS is as it was. A newer ledger is refused, as a newer state is: it could keep its units
 # otherwise, and what it leaves out would change with no word said.
 #
-# TO READ A NEWER LEDGER (v0.6.16-beta.4 writes 6, then 7), this tuple is the whole version gate: paid_claims()
-# refuses anything above max(LEDGER_SCHEMAS) as newer and anything else not in it as unknown. Append the number only
-# after reading the product's state/schema.py for that version: `spend` must still be (spend_id, at, capability,
-# thread_id, interruption_id), AUTOINCREMENT, written inside the claim and pruned as above; and then say so here,
-# bump __version__, and add a product-made ledger of that version to tests/test_product_state.py (LEDGER_REFS).
-LEDGER_SCHEMAS = (1, 2, 3, 4, 5)
+# TO READ A NEWER LEDGER (v0.6.16-beta.4 wrote 6 and 7, and so is read; the next is 8), this tuple is the whole version
+# gate: paid_claims() refuses anything above max(LEDGER_SCHEMAS) as newer and anything else not in it as unknown.
+# Append the number only after reading the product's state/schema.py for that version: `spend` must still be
+# (spend_id, at, capability, thread_id, interruption_id), AUTOINCREMENT, written inside the claim and pruned as above;
+# and then say so here, bump __version__ if a version is released, and add a product-made ledger of that version to
+# tests/test_product_state.py (LEDGER_REFS).
+LEDGER_SCHEMAS = (1, 2, 3, 4, 5, 6, 7)
 
 # LEDGER REACH. The ledger is the one lasting mark of the goal continuation's channel, and of its route once
 # core has written that record's next gates over `plugged`, and it does not keep its units for ever: both of
