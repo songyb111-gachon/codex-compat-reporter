@@ -732,6 +732,39 @@ def spend_ledger(home, spends=(), columns=("spend_id", "at", "capability", "thre
     return folder / "advanced.sqlite"
 
 
+def ledger_8(home, spends=()):
+    """The advanced edition's file of version 8 as v0.6.19's state/schema.py creates it fresh (the fixture is that
+    module's own STATEMENTS), with these (interruption id, time) units in `spend` and a row in each table version 8
+    added, in the prompts' new column, and in the wordings table the CHECK of which it dropped."""
+    folder = home / "config" / "advanced"
+    folder.mkdir(parents=True, exist_ok=True)
+    database = sqlite3.connect(folder / "advanced.sqlite")
+    database.executescript((HERE / "advanced_v8_schema.sql").read_text(encoding="utf-8"))
+    assert database.execute("PRAGMA user_version").fetchone()[0] == 8
+    for key, at in spends:
+        database.execute("INSERT INTO spend VALUES (NULL, ?, 'goal_continuation', ?, ?)", (at, THREAD, key))
+    database.executescript("""
+        INSERT INTO usage_samples VALUES ('codex', 300, 1769999000.5, 91.5, 1770000000);
+        INSERT INTO token_days VALUES ('2026-10-20', '0a1b2c3d-0001-7000-8000-000000000001', NULL, 5, 4, 3, 2, 1);
+        INSERT INTO token_files VALUES ('0123456789abcdef', '0a1b2c3d-0001-7000-8000-000000000001', 10, 5, 7, 1.5);
+        INSERT INTO outbox VALUES (NULL, 'ntfy', 'recovered', 'usage_limit', 'task 1', 1.5, 0, 'waiting', NULL);
+        INSERT INTO feed VALUES (1, 1.5, 'operational', 'degraded', 2);
+        INSERT INTO remote VALUES ('telegram', 1.5, 0, 7, NULL, NULL);
+        INSERT INTO opens VALUES (NULL, '0a1b2c3d-0001-7000-8000-000000000001', '%s', 1.5, 'opened');
+        INSERT INTO restarts VALUES (1.5, 1, 1);
+        INSERT INTO account_seen VALUES (1, '0123456789abcdef', 'plus', 1.5);
+        INSERT INTO hook_claims VALUES ('%s', '%s', 1.5, 'blocked');
+        INSERT INTO wordings VALUES ('fleet_alias', 'fleet_alias', 'a wording only the edition keeps', 1.5);
+        INSERT INTO prompts (thread_id, words, trigger, occurrences, sent_count, depends, position, state, created_at,
+                             while_running)
+            VALUES ('0a1b2c3d-0001-7000-8000-000000000001', 'a prompt only the edition keeps', 'after_turn', 1, 0, 0, 0,
+                    'waiting', 1.5, 'wait');
+    """ % ("5" * 64, "6" * 64, "7" * 64))
+    database.commit()
+    database.close()
+    return folder / "advanced.sqlite"
+
+
 def derived(key):
     """The client id the product queues a marker-free continuation of `key` under (domain/ids.py)."""
     namespace = uuid.uuid5(uuid.NAMESPACE_URL, "urn:codex-auto-resume:continuation-client-id")
@@ -787,9 +820,9 @@ class RouteTests(unittest.TestCase):
         self.assertEqual((len(report["records"]), notes["routed"]), (2, 3))
 
     def test_a_unit_the_spend_ledger_paid_at_its_last_claim_leaves_it_out(self):
-        self.assertEqual(reporter.LEDGER_SCHEMAS, (1, 2, 3, 4, 5, 6, 7))
+        self.assertEqual(reporter.LEDGER_SCHEMAS, (1, 2, 3, 4, 5, 6, 7, 8))
         # v0.6.11-alpha's ledger, v0.6.11-beta.2's on, v0.6.14-beta's on, v0.6.15-beta's on, v0.6.16-beta.3's on,
-        # v0.6.16-beta.4's on (6 is its step on the way to 7)
+        # v0.6.16-beta.4's on (6 is its step on the way to 7), v0.6.19's (8)
         for version in reporter.LEDGER_SCHEMAS:
             with self.subTest(version):
                 report, notes, _out = self.outcome([self.other(1), self.other(2), self.other(3)], spends=[
@@ -857,6 +890,33 @@ class RouteTests(unittest.TestCase):
                     for word in ("wording", "budget is low", "headless", "gpt-x", "is the build green", "chat_messages"):
                         self.assertNotIn(word, text)
 
+    def test_ledger_8_of_v0_6_19_reads_as_ledger_7_and_says_nothing_of_its_new_tables(self):
+        """Version 8 (v0.6.19, the file as its state/schema.py creates it: tests/advanced_v8_schema.sql) adds ten
+        tables, the column prompts.while_running and `wordings` made again without its CHECK, and leaves `spend` as it
+        was: with a row in each of them beside the units, the report, the counts and the status are the version-7
+        file's, and no word of the new tables, a prompt or a wording appears in anything it writes or says."""
+        rows = [self.other(1), self.other(2), self.other(3)]
+        spends = [("1" * 64, NOW - 1800), ("2" * 64, NOW - 100 * DAY)]
+        seen = {}
+        for version in (7, 8):
+            with self.subTest(version):
+                notes = {}
+                with Installation([record()] + rows, columns=SCHEMA_4_COLUMNS, user_version=4) as installation:
+                    if version == 7:
+                        spend_ledger(installation.home, spends, user_version=7)
+                    else:
+                        ledger_8(installation.home, spends)
+                    report = reporter.build(LOGIN, notes=notes)
+                    _code, out, _err = run_main("status")
+                seen[version] = (dict(report, recorded_at=None), notes)
+                if version == 8:
+                    for text in (reporter.encode(report).decode("ascii"), out, json.dumps(notes)):
+                        for word in ("usage_samples", "token_days", "outbox", "hook_claims", "while_running", "wording",
+                                     "a prompt only the edition keeps", "telegram", "ntfy", "fleet", "operational"):
+                            self.assertNotIn(word, text)
+        self.assertEqual(seen[8], seen[7])
+        self.assertEqual((len(seen[8][0]["records"]), seen[8][1]["routed"], seen[8][1]["route_unknown"]), (3, 1, 0))
+
     def test_a_record_claimed_before_the_ledger_reaches_back_is_left_out_and_said(self):
         """Its unit may be one the ledger pruned (LEDGER REACH): it is left out, counted and said."""
         rows = [self.other(1, last_claim_at=NOW - 100 * DAY),        # before the ledger's 90 days: unknown
@@ -913,7 +973,7 @@ class RouteTests(unittest.TestCase):
                 ("no interruption ids", ("spend_id", "at", "capability", "thread_id"), 2,
                  "does not hold the spend ledger.*Update codex-compat-reporter"),
                 # A newer ledger, even with the same columns, could keep its units otherwise.
-                ("a newer ledger", every, 8, r"newer Codex Auto Resume than this reporter knows \(ledger schema 8\)\. "
+                ("a newer ledger", every, 9, r"newer Codex Auto Resume than this reporter knows \(ledger schema 9\)\. "
                                              r"Update codex-compat-reporter\."),
                 ("no ledger schema", every, 0, "has ledger schema 0, which no Codex Auto Resume this reporter knows")):
             with self.subTest(name):

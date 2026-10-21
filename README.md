@@ -137,9 +137,9 @@ It needs:
 - Codex Auto Resume v0.6.0 or newer, installed, with its watcher having run at least once. It reads
   the state database of v0.6.0 to v0.6.11-alpha (schema 3), of v0.6.11-beta to v0.6.14 (schema 4) and
   of v0.6.15-beta and later (schema 5), and the advanced edition's spend ledger of every version up to
-  v0.6.16-beta.4 (versions 5 to 7) - from its spend table alone: the usage meter's readings, the wrap-up's
-  wordings, the turns run here, the Dashboard's chat and the edition's other tables are never read, and a
-  report says nothing of them.
+  v0.6.19 (versions 5 to 8) - from its spend table alone: the usage meter's readings, the wrap-up's
+  wordings, the turns run here, the Dashboard's chat, the queued prompts, the usage and token records, the
+  pushed notices and the edition's other tables are never read, and a report says nothing of them.
   A state, or an advanced-edition spend ledger, written by a newer Codex Auto Resume than it knows
   is never guessed at: `status` says it cannot be read, and `report` refuses and asks you to update
   codex-compat-reporter.
