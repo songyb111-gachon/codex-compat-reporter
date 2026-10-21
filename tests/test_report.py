@@ -524,6 +524,20 @@ class DeliveredTests(unittest.TestCase):
         self.assertEqual(report["capabilities"]["exact_thread_recovery"]["level"], "VERIFIED")
         self.assertEqual(report["verdict"], "PASS")
 
+    def test_a_recovery_cut_off_after_progress_is_reported_by_its_word_and_counts_as_worked(self):
+        # v0.6.18: recovered, with the reason progress_then_turn_cut_off, the turn row still saying inProgress.
+        cut_off = record(state="recovered", last_error="progress_then_turn_cut_off",
+                         recovery_turn_status="inProgress")
+        with Installation([cut_off]):
+            report = reporter.build(LOGIN)
+        kept = report["records"][0]
+        self.assertEqual([kept["state"], kept["reason"], kept["turn_status"]],
+                         ["recovered", "progress_then_turn_cut_off", "inProgress"])
+        self.assertEqual(report["capabilities"]["exact_thread_recovery"]["level"], "VERIFIED")
+        self.assertEqual(report["capabilities"]["outcome_observation"]["confirmed"], 1)
+        self.assertEqual(report["verdict"], "PASS")
+        self.assertEqual(reporter.validate(reporter.encode(report))[1], [], "the receiving side's check takes the word")
+
     def test_a_recovery_that_never_reached_codex_verifies_nothing(self):
         with Installation([record(state="waiting_for_usage", resumed_at=None, outcome_at=None,
                                   submitted_at=None, recovery_turn_id=None,
@@ -933,8 +947,12 @@ class RouteTests(unittest.TestCase):
     @unittest.skipUnless(PRODUCT_READER.is_file(), "the product's checkout is not beside this one")
     def test_every_word_it_carries_is_one_the_receiving_side_knows(self):
         reader = load_product_reader()
+        # Words this reporter reads from a release that is not yet on the product's main, where the receiving side
+        # lives: v0.6.18's progress_then_turn_cut_off (its reader takes every ReasonCode, so it knows the word the
+        # day that release is promoted; a checkout of dev already does). Nothing else may be ahead of it.
+        ahead = frozenset({"progress_then_turn_cut_off"})
         for mine, theirs in ((reporter.CATEGORIES, reader.CATEGORIES), (reporter.STATES, reader.STATES),
-                             (reporter.REASONS, reader.REASONS), (reporter.TURN_STATUSES, reader.TURN_STATUSES)):
+                             (reporter.REASONS - ahead, reader.REASONS), (reporter.TURN_STATUSES, reader.TURN_STATUSES)):
             self.assertLessEqual(mine, theirs)
 
 

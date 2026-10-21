@@ -180,6 +180,9 @@ STATES = frozenset({
     "waiting_for_app", "waiting_for_loaded_thread", "waiting_for_usage", "waiting_poll",
     "waiting_reset", "waiting_retry", "withdrawn_unconfirmed"})
 TURN_STATUSES = frozenset({"completed", "failed", "inProgress", "interrupted", "other"})
+# progress_then_turn_cut_off is v0.6.18's (domain/reason_vocabulary.py, engine/outcome.py): a recovery turn that did work and
+# whose row Codex never finished (Codex closed, or the PC went off, mid-turn) is `recovered` with this reason. The state is
+# what counts a record as worked (OUTCOMES holds recovered), and the reason is only passed on, so the word changes no count.
 REASONS = frozenset({
     "ambiguous_receipt", "awaiting_delivery_receipt", "budget_restored", "cancel",
     "category_disabled", "chain_cap", "chain_time_cap", "correlation_conflict", "daily_submission_cap",
@@ -190,7 +193,7 @@ REASONS = frozenset({
     "observe_only", "observe_only_unknown", "offline",          # v0.6.11's, with chain_time_cap
     "other_recovery_in_flight", "outcome_deadline", "owned_queue_removed", "parent_cancelled",
     "parent_handed_over", "paused", "paused_unknown", "post_send_bookkeeping_failed",
-    "progress_observed", "progress_then_turn_failed", "projection_stale",
+    "progress_observed", "progress_then_turn_cut_off", "progress_then_turn_failed", "projection_stale",
     "queue_cleanup_unconfirmed", "queue_launch_retry_limit", "queue_process_not_started",
     "queue_result_unknown_do_not_resend", "queued_item_edited", "recovery_budget",
     "released_after_withdrawal", "released_before_send", "retry_now", "stale_turn_row",
