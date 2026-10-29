@@ -137,9 +137,11 @@ It needs:
 - Codex Auto Resume v0.6.0 or newer, installed, with its watcher having run at least once. It reads
   the state database of v0.6.0 to v0.6.11-alpha (schema 3), of v0.6.11-beta to v0.6.14 (schema 4) and
   of v0.6.15-beta and later (schema 5), and the advanced edition's spend ledger of every version up to
-  v0.6.19 (versions 5 to 8) - from its spend table alone: the usage meter's readings, the wrap-up's
-  wordings, the turns run here, the Dashboard's chat, the queued prompts, the usage and token records, the
-  pushed notices and the edition's other tables are never read, and a report says nothing of them.
+  v0.6.20-beta.3 (versions 5 to 9) - from its spend table, and from v0.6.20 on the Stop hook's answers
+  (`hook_claims`: an interruption id and the word it answered with), alone: the usage meter's readings,
+  the wrap-up's wordings, the turns run here, the Dashboard's chat, the queued prompts, the lines added
+  to a running turn (v0.6.20's steers), the usage and token records, the pushed notices and the edition's
+  other tables are never read, and a report says nothing of them.
   A state, or an advanced-edition spend ledger, written by a newer Codex Auto Resume than it knows
   is never guessed at: `status` says it cannot be read, and `report` refuses and asks you to update
   codex-compat-reporter.
@@ -178,6 +180,7 @@ machine.
 | `report --codex-version VERSION` | Reports on another Codex version this machine has records for, as `0.155.0` or `codex-cli 0.155.0`. `--version` is the same option. |
 | `report --out FILE` | Writes the report to FILE instead of `codex-cli-<version>.json` in the current folder. The name you choose stays on your machine; see `submit`. |
 | `report --force` | Writes over a file that is already there. Without it, `report` refuses, so a file you have read is never replaced behind your back. |
+| `report --credit` | Credit me in the project's contributors list. Once the report is filed, your GitHub login - as your pull request shows it, never anything typed into the file - is added to the project's contributors list and its README's thanks line, once. Off unless you choose it: without it, nothing about you is written anywhere beyond the report's own folder. The report then says only `"credit": true`. `Report.exe` has a check box for it, unticked. |
 | `submit [FILE]` | Sends FILE. Without FILE it takes the one `codex-cli-*.json` in the current folder, and refuses if there is none or more than one. Without `--yes` or `--dry-run` it checks everything, says what it would do, sends nothing, and exits with 2. |
 | `submit --dry-run` | Checks everything, says what it would write, and stops (exit 0). It still asks GitHub the read-only questions below. |
 | `submit --yes` | Yes: writes to GitHub as listed below and opens the pull request. |
@@ -205,7 +208,7 @@ Codex home is `%USERPROFILE%\.codex` unless `CODEX_HOME` does.
 | --- | --- |
 | `.codex-auto-resume\app\.codex-plugin\plugin.json` | the installed product version |
 | `.codex-auto-resume\config\state.sqlite` | the recovery records: when each was detected, delivered and how it ended, its category, state and reason, which gates it passed, the thread and turn ids that key the count below, and the interruption id, client id and claim time that tell a record another route sent (below). From schema 5, also whether a record is of a further Codex home the watcher watches - only so that its turns are not counted from this home's history; a record of another home is counted like any other, and the report never says which home it was of, or that there is more than one. Records hidden with Clear history are left out. |
-| `.codex-auto-resume\config\advanced\advanced.sqlite` | only where the advanced edition keeps it: its spend ledger's interruption ids and times, which name the sends an advanced feature paid for, its schema, and how many units it holds and was ever given, which say how far back it can tell; no other table of that file, the usage meter's and the chat's among them |
+| `.codex-auto-resume\config\advanced\advanced.sqlite` | only where the advanced edition keeps it: its spend ledger's interruption ids and times, which name the sends an advanced feature paid for, its schema, and how many units it holds and was ever given, which say how far back it can tell; and the interruption ids the Stop hook blocked a turn's end for (its `hook_claims`, interruption id and outcome only); no other table of that file, the usage meter's, the chat's and the steers' among them |
 | `.codex-auto-resume\logs\auto-resume.log` and `auto-resume.log.1` to `.5` | which Codex version was running around each record, and whether the product's own checks passed on it |
 | `.codex-auto-resume\config\compatibility.json` | what the watcher itself concluded about the Codex installed now |
 | `.codex\thread_history_*.sqlite` (the newest) | how many items of each kind the recovered turn produced. A further Codex home's history is not read, so its records carry no count. |
@@ -215,10 +218,12 @@ product finds in Codex's history to prove it arrived. The advanced edition has f
 you turn them on, continue a conversation by a route of their own - queued through Codex's app server
 with no marker, or by setting the conversation's goal active again - and their records stay in the
 same database. Counted, they would make the standard route look better or worse on that Codex version
-than it was, and a report has no field to label them with. So each such record is left out, counted
-and said, as a hidden one is, by the marks the product itself writes: the client id it gives a
-marker-free continuation, a gate word only the edition's features write, and a unit the edition's
-spend ledger paid at the claim the record was sent from. That ledger keeps a unit 90 days at most, and
+than it was. So each such record is kept out of the report's `records` and written apart, in its
+`advanced_records`, with the same fields: the project counts them as Reported for the advanced edition,
+beside the version, and never towards a verdict, a level or the standard route's counts. The marks are
+the product's own: the client id it gives a marker-free continuation, a gate word only the edition's
+features write, a unit the edition's spend ledger paid at the claim the record was sent from, and the
+Stop hook's answer that it blocked that turn's end. That ledger keeps a unit 90 days at most, and
 5,000 of them, so once it has let one go, a record last claimed before what it can still vouch for may
 have lost its mark: it is left out too, counted and said as a record whose route is unknown. Nothing is
 guessed: a record no mark names, claimed where the ledger can still tell, is the standard route's,

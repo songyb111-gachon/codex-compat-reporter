@@ -765,6 +765,26 @@ def ledger_8(home, spends=()):
     return folder / "advanced.sqlite"
 
 
+def ledger_9(home, spends=(), hooks=()):
+    """The advanced edition's file of version 9 as v0.6.20-beta.3's state/schema.py creates it fresh (the fixture is that
+    module's own STATEMENTS), with these (interruption id, time) units in `spend`, a steer in the one table version 9
+    added, and these (interruption id, outcome) rows in `hook_claims`, which v0.6.20's Stop hook writes."""
+    folder = home / "config" / "advanced"
+    folder.mkdir(parents=True, exist_ok=True)
+    database = sqlite3.connect(folder / "advanced.sqlite")
+    database.executescript((HERE / "advanced_v9_schema.sql").read_text(encoding="utf-8"))
+    assert database.execute("PRAGMA user_version").fetchone()[0] == 9
+    for key, at in spends:
+        database.execute("INSERT INTO spend VALUES (NULL, ?, 'goal_continuation', ?, ?)", (at, THREAD, key))
+    for key, outcome in hooks:
+        database.execute("INSERT INTO hook_claims VALUES (?, ?, 1.5, ?)", (key, "7" * 64, outcome))
+    database.execute("INSERT INTO steers VALUES (NULL, ?, 'a steer only the edition keeps', "
+                     "'0a1b2c3d-0009-7000-8000-000000000009', 'accepted', NULL, 1.5, 2.5)", (THREAD,))
+    database.commit()
+    database.close()
+    return folder / "advanced.sqlite"
+
+
 def derived(key):
     """The client id the product queues a marker-free continuation of `key` under (domain/ids.py)."""
     namespace = uuid.uuid5(uuid.NAMESPACE_URL, "urn:codex-auto-resume:continuation-client-id")
@@ -820,9 +840,9 @@ class RouteTests(unittest.TestCase):
         self.assertEqual((len(report["records"]), notes["routed"]), (2, 3))
 
     def test_a_unit_the_spend_ledger_paid_at_its_last_claim_leaves_it_out(self):
-        self.assertEqual(reporter.LEDGER_SCHEMAS, (1, 2, 3, 4, 5, 6, 7, 8))
+        self.assertEqual(reporter.LEDGER_SCHEMAS, (1, 2, 3, 4, 5, 6, 7, 8, 9))
         # v0.6.11-alpha's ledger, v0.6.11-beta.2's on, v0.6.14-beta's on, v0.6.15-beta's on, v0.6.16-beta.3's on,
-        # v0.6.16-beta.4's on (6 is its step on the way to 7), v0.6.19's (8)
+        # v0.6.16-beta.4's on (6 is its step on the way to 7), v0.6.19's (8), v0.6.20-beta.3's (9)
         for version in reporter.LEDGER_SCHEMAS:
             with self.subTest(version):
                 report, notes, _out = self.outcome([self.other(1), self.other(2), self.other(3)], spends=[
@@ -917,6 +937,76 @@ class RouteTests(unittest.TestCase):
         self.assertEqual(seen[8], seen[7])
         self.assertEqual((len(seen[8][0]["records"]), seen[8][1]["routed"], seen[8][1]["route_unknown"]), (3, 1, 0))
 
+    def test_ledger_9_of_v0_6_20_reads_as_ledger_8_and_never_reads_a_steer(self):
+        """Version 9 (v0.6.20-beta.3, tests/advanced_v9_schema.sql) adds the table steers - a person's own words added to a
+        running turn - and changes nothing else: with a steer beside the units, the report, the counts and the status
+        are the version-8 file's, and no word of the steer appears in anything it writes or says."""
+        rows = [self.other(1), self.other(2), self.other(3)]
+        spends = [("1" * 64, NOW - 1800), ("2" * 64, NOW - 100 * DAY)]
+        seen = {}
+        for version in (8, 9):
+            with self.subTest(version):
+                notes = {}
+                with Installation([record()] + rows, columns=SCHEMA_4_COLUMNS, user_version=4) as installation:
+                    (ledger_8 if version == 8 else ledger_9)(installation.home, spends)
+                    report = reporter.build(LOGIN, notes=notes)
+                    _code, out, _err = run_main("status")
+                seen[version] = (dict(report, recorded_at=None), notes)
+                if version == 9:
+                    for text in (reporter.encode(report).decode("ascii"), out, json.dumps(notes)):
+                        for word in ("steer", "a steer only the edition keeps", "0a1b2c3d-0009"):
+                            self.assertNotIn(word, text)
+        self.assertEqual(seen[9], seen[8])
+
+    def test_a_turn_the_stop_hook_blocked_is_another_routes(self):
+        """THE STOP HOOK: a record whose interruption the hook answered with `blocked` is another route's, whatever
+        core did after; `passed` and `refused` leave the record the standard route's. Reverted, the blocked record
+        would be counted in `records`."""
+        rows = [self.other(1), self.other(2), self.other(3)]
+        notes = {}
+        with Installation([record()] + rows, columns=SCHEMA_4_COLUMNS, user_version=4) as installation:
+            ledger_9(installation.home, hooks=[("1" * 64, "blocked"), ("2" * 64, "passed"), ("3" * 64, "refused")])
+            report = reporter.build(LOGIN, notes=notes)
+        self.assertEqual((len(report["records"]), notes["routed"], len(report["advanced_records"])), (3, 1, 1))
+
+    def test_another_routes_records_are_written_apart_and_never_move_the_verdict(self):
+        """ADVANCED RECORDS: another route's records on this version go into `advanced_records`, with the same nine
+        keys; `records`, the levels and the verdict are what they were without them; the receiving side's rules
+        take the file. With none, the key is absent, so such a report is the file every earlier version wrote."""
+        plain = self.outcome([self.other(2)])[0]
+        self.assertNotIn("advanced_records", plain)
+        report, notes, _out = self.outcome([self.other(1, recovery_client_id=derived("1" * 64)), self.other(2)])
+        self.assertEqual((len(report["records"]), notes["advanced"]), (len(plain["records"]), 1))
+        self.assertEqual(set(report["advanced_records"][0]), reporter.RECORD_KEYS)
+        self.assertEqual({k: v for k, v in report.items() if k not in ("advanced_records", "recorded_at")},
+                         {k: v for k, v in plain.items() if k != "recorded_at"})
+        self.assertEqual(reporter.validate(reporter.encode(report))[1], [])
+        facts = reporter.facts(report, reporter.encode(report), notes)
+        self.assertEqual(facts["advanced_records"], 1)
+        self.assertTrue(any(line.startswith("advanced   : 1 record an advanced feature") for line in facts["lines"]))
+        for bad in ([], "x", [{"detected_at": None}]):
+            with self.subTest(bad=bad):
+                self.assertNotEqual(reporter.validate(reporter.encode(dict(report, advanced_records=bad)))[1], [])
+
+    def test_credit_is_off_unless_chosen_and_is_only_a_boolean(self):
+        """CREDIT: without --credit the report has no `credit` key; with it, exactly `"credit": true` and no other
+        change - no name, no login beyond the one it always carries. Anything but a boolean is refused."""
+        with Installation([record()]) as installation:
+            off = reporter.build(LOGIN)
+            on = reporter.build(LOGIN, credit=True)
+            _code, out, _err = run_main("report", "--login", LOGIN, "--out", str(installation.home / "r.json"),
+                                        "--credit")
+            written = json.loads((installation.home / "r.json").read_text(encoding="utf-8"))
+        self.assertNotIn("credit", off)
+        self.assertIs(on.pop("credit"), True)
+        self.assertEqual(dict(on, recorded_at=None), dict(off, recorded_at=None))
+        self.assertIs(written["credit"], True)
+        self.assertIn("credit     : yes", out)
+        for bad in ("yes", 1, None, {"login": "someone-else"}):
+            with self.subTest(bad=bad):
+                self.assertIn("credit is not true or false",
+                              reporter.validate(reporter.encode(dict(off, credit=bad)))[1])
+
     def test_a_record_claimed_before_the_ledger_reaches_back_is_left_out_and_said(self):
         """Its unit may be one the ledger pruned (LEDGER REACH): it is left out, counted and said."""
         rows = [self.other(1, last_claim_at=NOW - 100 * DAY),        # before the ledger's 90 days: unknown
@@ -973,7 +1063,7 @@ class RouteTests(unittest.TestCase):
                 ("no interruption ids", ("spend_id", "at", "capability", "thread_id"), 2,
                  "does not hold the spend ledger.*Update codex-compat-reporter"),
                 # A newer ledger, even with the same columns, could keep its units otherwise.
-                ("a newer ledger", every, 9, r"newer Codex Auto Resume than this reporter knows \(ledger schema 9\)\. "
+                ("a newer ledger", every, 10, r"newer Codex Auto Resume than this reporter knows \(ledger schema 10\)\. "
                                              r"Update codex-compat-reporter\."),
                 ("no ledger schema", every, 0, "has ledger schema 0, which no Codex Auto Resume this reporter knows")):
             with self.subTest(name):
@@ -1800,7 +1890,7 @@ RECORDS_KEYS = {"found", "total", "on_this_version", "other_versions", "not_plac
                 "route_unknown",
                 "problem", "text"}
 REPORT_KEYS = {"ok", "path", "codex_version", "verdict", "login", "records", "span", "bytes", "sha256",
-               "left_out", "lines", "kept", "said"}
+               "left_out", "lines", "kept", "said", "advanced_records", "credit"}
 REPORT_FILE_KEYS = {"path", "name", "exists", "already"}
 LOGIN_KEYS = {"ok", "login", "said", "gh"}
 LEFT_OUT_KEYS = {"hidden", "other_versions", "not_placed", "not_placed_why", "other_route", "route_unknown",

@@ -28,8 +28,9 @@ v0.6.11-alpha, or schema 4, v0.6.11-beta and later), the compatibility report it
 where the advanced edition keeps one, its spend ledger - and, for progress counts alone, Codex's own
 history database. Thread, turn and interruption ids, and the paths of those files, are read to find
 and join the records; they are used here and never written into the report. Records hidden with
-Clear history are left out, and so are records an advanced-edition feature carried by a route of
-its own (ANOTHER ROUTE, below) and those claimed before its spend ledger reaches back (LEDGER REACH).
+Clear history are left out, and so are those claimed before the advanced edition's spend ledger reaches
+back (LEDGER REACH). Records an advanced-edition feature carried by a route of its own (ANOTHER ROUTE,
+below) are kept apart from the standard route's, in `advanced_records` (ADVANCED RECORDS).
 
 What it writes: one JSON file of counts, states, times and version strings, which `report` writes
 and never writes over unless told to. `submit` sends exactly the bytes of that file, after you have
@@ -263,7 +264,7 @@ SPEND = ("interruption_id", "at")                 # the spend ledger's columns r
 # The spend ledger's user_versions this reporter reads, and no others: 1, written by v0.6.11-alpha and -beta,
 # 2, from v0.6.11-beta.2 (advanced state/schema.py SCHEMA_VERSION, the same through v0.6.12-alpha.2), 3, from
 # v0.6.14-beta, 4, from v0.6.15-beta, 5, from v0.6.16-beta.3, 6 and 7, from v0.6.16-beta.4 (v0.6.17 and v0.6.18 keep 7),
-# and 8, from v0.6.19. Version 2 added arming.warnings, version 3 the
+# 8, from v0.6.19, and 9, from v0.6.20-beta.3. Version 2 added arming.warnings, version 3 the
 # reset actions' tables (state/schema.py _STATEMENTS_V3, RESET_TABLES), version 4 the continuations, keep_going and
 # prompts tables and records.queue_id and withdraw (_STATEMENTS_V4, UPGRADE_FROM_3), and version 5 the meter table
 # (the usage meter's last reading of each window), the `options` and `continuations` tables made again with wider
@@ -274,12 +275,15 @@ SPEND = ("interruption_id", "at")                 # the spend ledger's columns r
 # (UPGRADE_TO_STAGE4), and version 8 (v0.6.19, state/schema.py UPGRADE_TO_V019, marked readable from 7) ten tables - usage_samples,
 # token_days, token_files, outbox, feed, remote, opens, restarts, account_seen and hook_claims - the column
 # prompts.while_running, and `wordings` made again without its CHECK on the key (prompts is made again on the way, for its
-# reasons' list) - and each left the spend table as it was:
+# reasons' list), and version 9 (v0.6.20, state/schema.py UPGRADE_TO_V020, still marked readable from 7) the one table
+# steers - each line a person asked to be added to a running turn, in their own words, never read here - with nothing
+# else changed - and each left the spend table as it was:
 # TABLES["spend"] is still (spend_id, at, capability, thread_id, interruption_id), AUTOINCREMENT, paid by the
 # same state record_spend inside the claim (ledger.py ClaimLedger.claim - its new queue-for-open answer pays
 # with it too, at that claim's time, so a record it queued is left out as another route's like any paid one),
 # and pruned by the same journal.py _prune_spend (90 days, 5,000 units; v0.6.16-beta.4 changed journal.py's WATCH_LIMIT
-# alone, and the v0.6.19 stage's pruning of its own tables left _prune_spend as it was). None of version 4's to 8's tables
+# alone, and the v0.6.19 stage's pruning of its own tables, and v0.6.20's of the steers, left _prune_spend as it was). None
+# of version 4's to 9's tables
 # is read - not `prompts`, `wordings` or `options`, which hold a person's queued prompts, own wording and choices, and the
 # new tables hold the usage readings, token counts, pushed notices, status feed, pairing, opens, restarts, account and hook
 # answers, none of it a core interruption: they hold the edition's own records, which are never core's
@@ -289,13 +293,35 @@ SPEND = ("interruption_id", "at")                 # the spend ledger's columns r
 # changed none of its columns, gates or states - beta.4 added a cancel_waiting action only), so SCHEMAS is as it was. A newer ledger is refused, as a newer state is: it could keep its units
 # otherwise, and what it leaves out would change with no word said.
 #
-# TO READ A NEWER LEDGER (v0.6.19 writes 8, and so is read; the next is 9), this tuple is the whole version
+# TO READ A NEWER LEDGER (v0.6.20-beta.3 writes 9, and so is read; the next is 10), this tuple is the whole version
 # gate: paid_claims() refuses anything above max(LEDGER_SCHEMAS) as newer and anything else not in it as unknown.
 # Append the number only after reading the product's state/schema.py for that version: `spend` must still be
 # (spend_id, at, capability, thread_id, interruption_id), AUTOINCREMENT, written inside the claim and pruned as above;
 # and then say so here, bump __version__ if a version is released, and add a product-made ledger of that version to
 # tests/test_product_state.py (LEDGER_REFS).
-LEDGER_SCHEMAS = (1, 2, 3, 4, 5, 6, 7, 8)
+LEDGER_SCHEMAS = (1, 2, 3, 4, 5, 6, 7, 8, 9)
+
+# ADVANCED RECORDS (1.5.4). Another route's records are left out of a report's `records`, which are the standard
+# route's alone, and - from 1.5.4 - written apart, in the report's `advanced_records`: the same nine keys, placed on a
+# version by the same rule, read and counted by the project with the same counting rule into the advanced edition's own
+# Reported counts beside the version (build/community_report.py). They never move a verdict, a capability's level or the
+# standard route's counts: the project's recomputation reads `records` alone, and so does this tool's. A record whose
+# route is unknown (LEDGER REACH) is in neither list.
+#
+# CREDIT (1.5.4). `report --credit` (the window's check box) is the person's own choice, off unless made, to be named in
+# the project's contributors list. It writes `"credit": true` into the report and nothing else: the login credited is
+# the pull request's author as GitHub reports it when the report is filed (build/community_file.py), never a name typed
+# into the file. Without it the report has no `credit` key at all.
+#
+# THE STOP HOOK (v0.6.20, stop_hook_continuation). Codex runs the edition's Stop hook as a turn ends; where it blocks the
+# end with a continuation, the continuation goes into that same turn and core's record of the interruption is held -
+# whatever core does with it afterwards, the hook carried it first (advanced engine/hookclaims.py). The hook pays its unit
+# at its own time, not at a claim of core's, so the spend mark above cannot name the record; its own row can: one row of
+# `hook_claims` (a table of ledger 8, written from v0.6.20) under the interruption id core derives from the same turn,
+# with the outcome `blocked`. Such a record is another route's. The two columns HOOK names are read, and nothing else of
+# that table (its turn digest and time are never read); a ledger without the table holds no such row.
+HOOK = ("interruption_id", "outcome")
+HOOK_BLOCKED = "blocked"
 
 # LEDGER REACH. The ledger is the one lasting mark of the goal continuation's channel, and of its route once
 # core has written that record's next gates over `plugged`, and it does not keep its units for ever: both of
@@ -584,7 +610,8 @@ def state_rows():
 
 def paid_claims():
     """(paid, reach) from the advanced edition's spend ledger: paid is {interruption id: the claim times a
-    feature paid a unit at}, and reach the earliest claim time it can still tell, or None when it can tell
+    feature paid a unit at, and the word `blocked` for one the Stop hook answered (THE STOP HOOK)}, and reach
+    the earliest claim time it can still tell, or None when it can tell
     every one (LEDGER REACH). ({}, None) where there is no ledger - every standard installation, and every
     one before v0.6.11.
 
@@ -612,6 +639,13 @@ def paid_claims():
             for key, at in db.execute("SELECT %s FROM spend WHERE interruption_id IS NOT NULL" % ", ".join(SPEND)):
                 if isinstance(key, str) and _moment(at):
                     paid.setdefault(key, set()).add(_moment(at))
+            if found >= 8 and db.execute("SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'hook_claims'"
+                                         ).fetchone()[0]:
+                hooked = {row[1] for row in db.execute("PRAGMA table_info(hook_claims)")}
+                if set(HOOK) <= hooked:
+                    for key, outcome in db.execute("SELECT %s FROM hook_claims" % ", ".join(HOOK)):
+                        if isinstance(key, str) and outcome == HOOK_BLOCKED:
+                            paid.setdefault(key, set()).add(HOOK_BLOCKED)
             units, oldest = db.execute("SELECT count(*), min(at) FROM spend").fetchone()
             given = None                # how many units the table was ever given; None when SQLite keeps no count
             if db.execute("SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'sqlite_sequence'"
@@ -646,6 +680,8 @@ def another_route(row, paid) -> bool:
     if any(name != "consent" and isinstance(gate, list) and len(gate) == 2 and isinstance(gate[1], str)
            and gate[1] in PLUG_WORDS for name, gate in _gates(row).items()):
         return True
+    if HOOK_BLOCKED in paid.get(key, ()):              # THE STOP HOOK: it blocked that turn's end
+        return True
     claim = _moment(row["last_claim_at"])
     return claim is not None and claim in paid.get(key, ())
 
@@ -657,21 +693,29 @@ def beyond_reach(row, reach) -> bool:
     return reach is not None and claim is not None and claim < reach
 
 
-def by_route(rows):
-    """(the records the standard route carried, how many another route did, how many were claimed before
-    the ledger can tell), the last two of which a report leaves out."""
+def split_routes(rows):
+    """(the records the standard route carried, the records another route did, how many were claimed before
+    the ledger can tell). The standard route's are a report's `records`; another route's are its
+    `advanced_records` (ADVANCED RECORDS); the last are left out of both."""
     if not rows:
-        return rows, 0, 0
+        return rows, [], 0
     paid, reach = paid_claims()
-    kept, routed, unknown = [], 0, 0
+    kept, routed, unknown = [], [], 0
     for row in rows:
         if another_route(row, paid):
-            routed += 1
+            routed.append(row)
         elif beyond_reach(row, reach):
             unknown += 1
         else:
             kept.append(row)
     return kept, routed, unknown
+
+
+def by_route(rows):
+    """(the records the standard route carried, how many another route did, how many were claimed before
+    the ledger can tell), the last two of which a report's `records` leave out."""
+    kept, routed, unknown = split_routes(rows)
+    return kept, len(routed), unknown
 
 
 def no_state() -> Refused:
@@ -711,10 +755,28 @@ def progress_items(thread_id, turn_id):
 
 
 # ------------------------------------------------------------------------------- the report
-def build(login: str, version: str | None = None, notes: dict | None = None) -> dict:
+def _record(row) -> dict:
+    """One record as a report carries it: counts, closed words and times, and nothing else."""
+    return {
+        "detected_at": iso(_moment(row["detected_at"])),
+        "delivered_at": iso(_moment(row["resumed_at"])) if _moment(row["resumed_at"]) else None,
+        "outcome_at": iso(_moment(row["outcome_at"])) if _moment(row["outcome_at"]) else None,
+        "category": known(row["category"], CATEGORIES), "state": known(row["state"], STATES),
+        "reason": known(row["last_error"], REASONS),
+        "turn_status": known(row["recovery_turn_status"], TURN_STATUSES),
+        "gates_passed": sum(1 for gate in _gates(row).values()
+                            if isinstance(gate, list) and gate and gate[0] == "PASS"),
+        # HOMES: another Codex home's turns are not in the history this reporter reads.
+        "progress_items": None if row.get(HOME_KEY) else progress_items(row["thread_id"], row["recovery_turn_id"]),
+    }
+
+
+def build(login: str, version: str | None = None, notes: dict | None = None, credit: bool = False) -> dict:
     """What this machine can show for one engine version, as counts, states and times.
 
     `notes`, when given, is filled with what the report leaves out and why, for the person to read.
+    `credit` is the person's own choice to be named in the project's contributors list (CREDIT): the
+    report then says `"credit": true`, and nothing else - no name or login is added for it.
     """
     login = check_login(login)
     product = installed_product()
@@ -725,8 +787,12 @@ def build(login: str, version: str | None = None, notes: dict | None = None) -> 
     if found is None:
         raise no_state()
     every, hidden = found
-    every, routed, unknown = by_route(every)
+    every, carried, unknown = split_routes(every)
+    routed = len(carried)
     timeline = engine_timeline(lines)
+    # ADVANCED RECORDS: another route's records on this version, placed by the same rule, written apart.
+    advanced = sorted((row for row in carried if placement(timeline, *span(row), current)[0] == version),
+                      key=lambda row: _moment(row["detected_at"]))
 
     rows, elsewhere, unplaced = [], 0, collections.Counter()
     for row in every:
@@ -740,10 +806,10 @@ def build(login: str, version: str | None = None, notes: dict | None = None) -> 
     rows.sort(key=lambda row: _moment(row["detected_at"]))
     if notes is not None:
         notes.update(hidden=hidden, elsewhere=elsewhere, unplaced=dict(unplaced), routed=routed,
-                     route_unknown=unknown)
-    if len(rows) > MAX_RECORDS:
+                     route_unknown=unknown, advanced=len(advanced))
+    if len(rows) + len(advanced) > MAX_RECORDS:
         raise Refused("This machine has %d records on %s, and a report holds at most %d. Nothing was "
-                      "written." % (len(rows), version, MAX_RECORDS))
+                      "written." % (len(rows) + len(advanced), version, MAX_RECORDS))
 
     reports = [(when, text) for when, text in lines if passes_checks(text, version)]
     checked = set(GATE) if reports else set()
@@ -779,7 +845,7 @@ def build(login: str, version: str | None = None, notes: dict | None = None) -> 
                 entry["level"] = "CHECKED" if name in checked else None
     levels = [entry["level"] for entry in capabilities.values() if entry["level"]]
 
-    return {
+    report = {
         "format": FORMAT,
         "codex_version": version,
         "verdict": "PASS" if "VERIFIED" in levels else ("CHECKED" if levels else "NONE"),
@@ -797,23 +863,17 @@ def build(login: str, version: str | None = None, notes: dict | None = None) -> 
                          "first": iso(reports[0][0]) if reports else None,
                          "last": iso(reports[-1][0]) if reports else None,
                          "covers": sorted(checked)},
-        "records": [{
-            "detected_at": iso(_moment(row["detected_at"])),
-            "delivered_at": iso(_moment(row["resumed_at"])) if _moment(row["resumed_at"]) else None,
-            "outcome_at": iso(_moment(row["outcome_at"])) if _moment(row["outcome_at"]) else None,
-            "category": known(row["category"], CATEGORIES), "state": known(row["state"], STATES),
-            "reason": known(row["last_error"], REASONS),
-            "turn_status": known(row["recovery_turn_status"], TURN_STATUSES),
-            "gates_passed": sum(1 for gate in _gates(row).values()
-                                if isinstance(gate, list) and gate and gate[0] == "PASS"),
-            # HOMES: another Codex home's turns are not in the history this reporter reads.
-            "progress_items": None if row.get(HOME_KEY) else progress_items(row["thread_id"], row["recovery_turn_id"]),
-        } for row in rows],
+        "records": [_record(row) for row in rows],
         "capabilities": {name: capabilities[name] for name in sorted(capabilities)},
         "note": "Content-free: counts, states and times from this machine's own records, with no conversation "
                 "text, identifiers or paths, counted only towards the Reported grade beside the version and "
                 "never towards a version's tier.",
     }
+    if advanced:
+        report["advanced_records"] = [_record(row) for row in advanced]
+    if credit is True:
+        report["credit"] = True
+    return report
 
 
 def encode(report: dict) -> bytes:
@@ -830,6 +890,10 @@ REPORTER_KEYS = {"github_login", "tool", "tool_version", "product_version", "win
 RECORD_KEYS = {"detected_at", "delivered_at", "outcome_at", "category", "state", "reason",
                "turn_status", "gates_passed", "progress_items"}
 CAPABILITY_KEYS = {"confirmed", "missed", "last_confirmed", "level"}
+# What a report may carry beside those, from 1.5.4 (the project's reader takes both, build/community_report.py
+# OPTIONAL_KEYS): `advanced_records`, another route's records, written apart (ADVANCED RECORDS), and `credit`, the
+# person's choice to be named in the contributors list (CREDIT) - a boolean, never a name.
+OPTIONAL_KEYS = {"advanced_records", "credit"}
 
 
 def _when(value, field, problems, allow_none=True):
@@ -862,7 +926,7 @@ def validate(raw: bytes):
         return None, ["not readable as UTF-8 JSON: %s" % error]
     if not isinstance(report, dict):
         return None, ["the file is not one JSON object"]
-    missing, extra = TOP_KEYS - set(report), set(report) - TOP_KEYS
+    missing, extra = TOP_KEYS - set(report), set(report) - TOP_KEYS - OPTIONAL_KEYS
     if missing or extra:
         return report, ["keys: " + "; ".join(said for said in (
             "missing " + ", ".join(sorted(missing)) if missing else "",
@@ -916,12 +980,20 @@ def validate(raw: bytes):
             or not set(covers) <= set(EXERCISED):
         problems.append("local_checks.covers names something that is not a capability")
 
+    if "credit" in report and not isinstance(report["credit"], bool):
+        problems.append("credit is not true or false")
     records = report["records"]
     if not isinstance(records, list) or len(records) > MAX_RECORDS:
         problems.append("records is not a list of at most %d" % MAX_RECORDS)
         records = []
-    for number, record in enumerate(records, 1):
-        where = "records[%d]" % number
+    advanced = report.get("advanced_records", [])
+    if (not isinstance(advanced, list) or ("advanced_records" in report and not advanced)
+            or len(records) + len(advanced) > MAX_RECORDS):
+        problems.append("advanced_records is not a list of 1 to %d records, with records counted in" % MAX_RECORDS)
+        advanced = []
+    listed = [("records[%d]" % n, r) for n, r in enumerate(records, 1)]
+    listed += [("advanced_records[%d]" % n, r) for n, r in enumerate(advanced, 1)]
+    for where, record in listed:
         if not isinstance(record, dict) or set(record) != RECORD_KEYS:
             problems.append("%s: its keys are not %s" % (where, ", ".join(sorted(RECORD_KEYS))))
             continue
@@ -1111,10 +1183,10 @@ def write_new(target: pathlib.Path, raw: bytes, force: bool) -> None:
         raise Refused("%s could not be written: %s" % (target, error))
 
 
-def make_report(login: str, version: str | None = None):
+def make_report(login: str, version: str | None = None, credit: bool = False):
     """(report, raw, notes): the report this machine would write, held to the project's rules first."""
     notes = {}
-    report = build(login, version, notes)
+    report = build(login, version, notes, credit=credit)
     raw = encode(report)
     _parsed, problems = validate(raw)
     if problems:
@@ -1143,9 +1215,18 @@ def facts(report: dict, raw: bytes, notes: dict | None = None) -> dict:
                             + ("; %d sent by an advanced feature's own route" % routed if routed else "")
                             + ("; %d claimed before the spend ledger reaches back" % unknown if unknown else "")}
         said.append("left out   : %s" % left_out["text"])
+    advanced = len(report.get("advanced_records") or ())
+    if advanced:
+        said.append("advanced   : %d record%s an advanced feature's own route carried, written apart: counted as "
+                    "Reported for the advanced edition, never towards a verdict" % (advanced, "s"[:advanced != 1]))
+    credit = report.get("credit") is True
+    if credit:
+        said.append("credit     : yes - once filed, your GitHub login, as your pull request shows it, goes into "
+                    "the project's contributors list")
     said.append("SHA-256    : %s" % digest)
     return {"codex_version": report["codex_version"], "verdict": report["verdict"],
             "login": _dict(report.get("reporter")).get("github_login"), "records": len(report["records"]),
+            "advanced_records": advanced, "credit": credit,
             "span": period, "bytes": len(raw), "sha256": digest, "left_out": left_out, "lines": said}
 
 
@@ -1163,12 +1244,13 @@ def kept(target: pathlib.Path, login: str):
     return report, raw
 
 
-def write_report(login: str, version: str | None = None, out=None, force: bool = False, keep: bool = False) -> dict:
+def write_report(login: str, version: str | None = None, out=None, force: bool = False, keep: bool = False,
+                 credit: bool = False) -> dict:
     """`report`: the report built, held to the project's rules and written, and what it holds (facts),
     with the path it was written to. With `keep`, a file already there is kept instead (kept()), and
     what it holds is said as the guide says it of a kept file; `kept` says which it was, and `said` is
     the guide's sentence for it."""
-    report, raw, notes = make_report(login, version)
+    report, raw, notes = make_report(login, version, credit=credit)
     target = pathlib.Path(out) if out else default_path(report["codex_version"])
     if keep and not force and target.exists():
         report, raw = kept(target, login)
@@ -1178,7 +1260,8 @@ def write_report(login: str, version: str | None = None, out=None, force: bool =
 
 
 def cmd_report(arguments) -> int:
-    written = write_report(arguments.login, arguments.version, arguments.out, arguments.force, arguments.keep)
+    written = write_report(arguments.login, arguments.version, arguments.out, arguments.force, arguments.keep,
+                           credit=arguments.credit)
     print("%s %s" % ("kept" if written["kept"] else "wrote", written["path"]))
     for line in written["lines"]:
         print("  " + line)
@@ -1871,7 +1954,8 @@ def json_login(arguments) -> dict:
 
 
 def json_report(arguments) -> dict:
-    return write_report(arguments.login, arguments.version, arguments.out, arguments.force, arguments.keep)
+    return write_report(arguments.login, arguments.version, arguments.out, arguments.force, arguments.keep,
+                        credit=arguments.credit)
 
 
 def json_submit(arguments) -> dict:
@@ -1966,6 +2050,10 @@ def main(argv=None) -> int:
     over.add_argument("--keep", action="store_true",
                       help="keep a file that is already there, held to the project's rules and to --login, as the "
                            "guide keeps it, instead of refusing")
+    report.add_argument("--credit", action="store_true",
+                        help="credit me in the project's contributors list: once the report is filed, your GitHub "
+                             "login as your pull request shows it is added there. Off unless you choose it; the "
+                             "report says only \"credit\": true, never a name")
     report.add_argument("--json", action="store_true", help=WINDOW)
     report.set_defaults(run=cmd_report, answer=json_report)
     submit = commands.add_parser("submit", help="send a report you have read, exactly as it is")

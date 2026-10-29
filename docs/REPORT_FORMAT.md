@@ -20,7 +20,9 @@ rather than a surprise.
 | `reporter` | `github_login`, `tool`, `tool_version`, `product_version`, `windows` (the OS build number, e.g. `10.0.26200`) |
 | `attribution` | the rule by which a record was counted for this version; `window` and `basis` are for a window set by hand and are `null` here |
 | `local_checks` | how many times the product's own checks passed on this version here, when first and last, and which capabilities they cover |
-| `records` | one entry per interruption this machine handled on this version, except those hidden with Clear history, those an advanced-edition feature sent by a route of its own, and those claimed before that edition's spend ledger reaches back, which are left out |
+| `records` | one entry per interruption this machine handled on this version by the standard route, except those hidden with Clear history and those claimed before the advanced edition's spend ledger reaches back, which are left out |
+| `advanced_records` | optional (1.5.4 on): the records an advanced-edition feature carried by a route of its own on this version, each with the same fields as a record. Present only when there is at least one. Counted as Reported for the advanced edition and never towards `verdict`, a `level` or the standard counts |
+| `credit` | optional (1.5.4 on): `true` when the person chose `report --credit` - to be named in the project's contributors list, by the pull request author's login as GitHub reports it. Absent otherwise. Never a name |
 | `capabilities` | per capability: `confirmed`, `missed`, `last_confirmed`, `level` - for the ten capabilities below, and no others |
 | `note` | the file saying what it is |
 
@@ -99,11 +101,16 @@ what to do about a refusal. Filing does, in order:
      not) on this version here, and that no recovery happened to show more.
 
    One report can be counted in both columns when different records say different things, and that
-   is shown rather than resolved.
+   is shown rather than resolved. Its `advanced_records`, when it has any, are counted the same way into
+   the advanced edition's own Reported counts beside the version, apart from these.
+4. **Credits, only when asked.** A report with `"credit": true` adds its pull request author's login,
+   as GitHub reports it, to the project's contributors list and README thanks line - once per person,
+   in the order they first helped, with a fixed sentence. Nothing from the file is written there.
 
 ## What gets a report refused
 
-- the format string, a key or a value outside what this page lists;
+- the format string, a key or a value outside what this page lists (`credit` that is not `true` or
+  `false`, an empty `advanced_records`, or more than 500 records and advanced records together);
 - a `codex_version` that is not `codex-cli` followed by a version in the grammar the product names
   engines by (`MAJOR.MINOR.PATCH`, optionally `-alpha.N` or `-alpha.N.M`), written the one way the
   product writes it: no leading zero, and no `.0` after an alpha's number;
