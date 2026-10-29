@@ -30,6 +30,11 @@ namespace CodexCompatReporter
         };
         internal const string Purpose = ": how Codex Auto Resume behaved on this machine, as a file.";
         internal const string Public = "The report is filed under it, and it is public once sent.";
+        // CREDIT (codex_compat_report.py): off unless the person ticks it, and then only `--credit`, which writes
+        // "credit": true - the login credited is the pull request author's, as GitHub reports it when it is filed.
+        internal const string CreditSaid = "Ticked, once the report is filed your GitHub login, as your pull request "
+            + "shows it, is added to the project's contributors list and its README's thanks line. Left unticked, "
+            + "nothing about you is written there.";
         internal const string Short = "It is short, and reading it is the only way to be sure of what would be sent:";
         internal const string Changed = "The file has changed since it was written. What would be sent is what it holds now.";
         internal const string Unsent = "Nothing was sent. The report stays here, yours to send or delete:";
@@ -87,6 +92,8 @@ namespace CodexCompatReporter
         string sendRefused;
         bool sendKept;
         bool haveRead;
+        // The person's own choice to be credited (CREDIT): off until they tick it.
+        bool credit;
 
         // The window's inside at 96 DPI, which is what is fixed: the size it opens at, and the least it can be
         // made. Windows draws a frame and a caption of its own metrics around it - one Windows draws 640 x 520
@@ -439,7 +446,7 @@ namespace CodexCompatReporter
         void WriteReport(bool keep)
         {
             Ask(keep && asking ? "Reading the report that is already there..." : "Writing the report...",
-                new string[] { "report", "--login", login, keep ? "--keep" : "--force", "--json" }, delegate(Answer answer)
+                ReportArguments(keep), delegate(Answer answer)
             {
                 if (answer.Ok)
                 {
@@ -453,6 +460,17 @@ namespace CodexCompatReporter
                 }
                 Build();
             });
+        }
+
+        string[] ReportArguments(bool keep)
+        {
+            List<string> arguments = new List<string>(new string[] { "report", "--login", login, keep ? "--keep" : "--force" });
+            if (credit)
+            {
+                arguments.Add("--credit");
+            }
+            arguments.Add("--json");
+            return arguments.ToArray();
         }
 
         void ToRead()
@@ -799,6 +817,15 @@ namespace CodexCompatReporter
             box.TextChanged += delegate { typed = box.Text; };
             stack.Add(box);
             focusOn = box;
+            CheckBox credited = new CheckBox();
+            credited.Name = "credit";
+            credited.Text = "C&redit me in the contributors list";
+            credited.AccessibleName = "Credit me in the contributors list";
+            credited.Checked = credit;
+            credited.UseVisualStyleBackColor = true;
+            credited.CheckedChanged += delegate { credit = credited.Checked; };
+            stack.Add(credited, true);
+            Words("credit_said", CreditSaid);
             if (loginRefused != null)
             {
                 Said("refused", loginRefused, "Why this login cannot be taken");
