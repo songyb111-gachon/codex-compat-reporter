@@ -74,7 +74,7 @@ import time
 import traceback
 import uuid
 
-__version__ = "1.5.4"
+__version__ = "1.5.5"
 
 REPO = "songyb111-gachon/codex-auto-resume-windows"
 HOST = "github.com"                             # every GitHub call names it; GH_HOST never redirects one
@@ -184,8 +184,11 @@ TURN_STATUSES = frozenset({"completed", "failed", "inProgress", "interrupted", "
 # progress_then_turn_cut_off is v0.6.18's (domain/reason_vocabulary.py, engine/outcome.py): a recovery turn that did work and
 # whose row Codex never finished (Codex closed, or the PC went off, mid-turn) is `recovered` with this reason. The state is
 # what counts a record as worked (OUTCOMES holds recovered), and the reason is only passed on, so the word changes no count.
+# app_server_unmatched is v0.6.22's (#58's follow-up): the Codex app runs and no server of its could be matched to the engine, so
+# a conversation waits for it. Until 1.5.5 this list did not name it and a report wrote it as "other"; it is the word that would
+# show a future #58 in the data before anyone files an issue. The reason is only passed on: it changes no count.
 REASONS = frozenset({
-    "ambiguous_receipt", "awaiting_delivery_receipt", "budget_restored", "cancel",
+    "ambiguous_receipt", "app_server_unmatched", "awaiting_delivery_receipt", "budget_restored", "cancel",
     "category_disabled", "chain_cap", "chain_time_cap", "correlation_conflict", "daily_submission_cap",
     "desktop_app_unavailable", "duplicate_marker", "duplicate_owner", "expired",
     "later_turn_exists", "latest_turn_changed", "loaded_recheck_failed", "loaded_state_unknown",

@@ -538,6 +538,33 @@ class DeliveredTests(unittest.TestCase):
         self.assertEqual(report["verdict"], "PASS")
         self.assertEqual(reporter.validate(reporter.encode(report))[1], [], "the receiving side's check takes the word")
 
+    def test_a_conversation_waiting_on_an_unmatched_app_server_is_reported_by_its_word(self):
+        # v0.6.22 (#58's follow-up): the Codex app runs and no server of its could be matched. Until 1.5.5 the report wrote
+        # this reason as "other"; by its own name it shows a future #58 in the data. It is only passed on: no count moves.
+        waiting = record(state="waiting_for_app", last_error="app_server_unmatched", resumed_at=None,
+                         outcome_at=None, submitted_at=None, recovery_turn_id=None, recovery_turn_status=None)
+        with Installation([waiting]):
+            report = reporter.build(LOGIN)
+        kept = report["records"][0]
+        self.assertEqual([kept["state"], kept["reason"]], ["waiting_for_app", "app_server_unmatched"])
+        self.assertIn("app_server_unmatched", reporter.REASONS)
+        self.assertEqual(reporter.known("app_server_unmatched", reporter.REASONS), "app_server_unmatched")
+        self.assertEqual(reporter.validate(reporter.encode(report))[1], [], "the report takes its own word")
+        self.assertNotIn("VERIFIED", {entry["level"] for entry in report["capabilities"].values()})
+
+    @unittest.skipUnless(PRODUCT_READER.is_file(), "the product's checkout is not beside this one")
+    def test_the_receiving_side_takes_the_unmatched_word(self):
+        waiting = record(state="waiting_for_app", last_error="app_server_unmatched", resumed_at=None,
+                         outcome_at=None, submitted_at=None, recovery_turn_id=None, recovery_turn_status=None)
+        with Installation([waiting]):
+            raw = reporter.encode(reporter.build(LOGIN))
+        self.assertEqual(json.loads(raw)["records"][0]["reason"], "app_server_unmatched", "by its own name, not other")
+        reader = load_product_reader()
+        if "app_server_unmatched" not in reader.REASONS:
+            self.skipTest("the product checkout beside this one predates v0.6.22, which added the word")
+        _report, problems, _recomputed = reader.inspect(raw, author=LOGIN, releases=None)
+        self.assertEqual(problems, [])
+
     def test_a_recovery_that_never_reached_codex_verifies_nothing(self):
         with Installation([record(state="waiting_for_usage", resumed_at=None, outcome_at=None,
                                   submitted_at=None, recovery_turn_id=None,
